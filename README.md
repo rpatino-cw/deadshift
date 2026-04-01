@@ -17,6 +17,16 @@
 
 ---
 
+> ### Just want to play? Your host will text you a server IP. Then:
+> ```bash
+> git clone https://github.com/rpatino-cw/deadshift.git
+> cd deadshift
+> bash play.sh
+> ```
+> **Windows?** Double-click `play.bat` instead. That's it. It installs everything for you.
+
+---
+
 ## How It Works
 
 <p align="center">
@@ -47,20 +57,20 @@
 ```bash
 git clone https://github.com/rpatino-cw/deadshift.git
 cd deadshift
-npm install              # one-time server setup
-node server.js &         # start the server
-pip install -r requirements.txt   # one-time client setup
-python3 game.py          # launch the game
+bash play.sh host
 ```
+That's it. It installs deps, starts the server, prints your IP, and opens the game.
 
 ### Players (everyone else)
 ```bash
 git clone https://github.com/rpatino-cw/deadshift.git
 cd deadshift
-pip install -r requirements.txt
-python3 game.py
+bash play.sh
 ```
-> Enter the host's IP (shown in server output) and the 4-letter room code.
+Enter the server IP your host gives you + the room code. **Windows?** Double-click `play.bat`.
+
+> **Requirements:** Python 3.10+ (all players). Node.js 18+ (host only). Same WiFi.
+> Everything else installs automatically on first run.
 
 ---
 

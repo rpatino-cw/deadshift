@@ -10,6 +10,13 @@ import pygame
 
 ADMIN_MODE = "--admin" in sys.argv or "-a" in sys.argv
 
+# Parse --server flag: python3 game.py --server 192.168.1.51:3000
+_SERVER_OVERRIDE = None
+for i, arg in enumerate(sys.argv):
+    if arg == "--server" and i + 1 < len(sys.argv):
+        _SERVER_OVERRIDE = sys.argv[i + 1]
+        break
+
 # ── Config ──────────────────────────────────────────────────────────
 WIDTH, HEIGHT = 1024, 768
 MAP_W, MAP_H = 1600, 1200
@@ -70,7 +77,7 @@ class GameState:
         self.notification_time = 0
         self.name_input = ""
         self.code_input = ""
-        self.server_input = "localhost:3000"
+        self.server_input = _SERVER_OVERRIDE or "localhost:3000"
         self.menu_cursor = 0  # 0=name, 1=code, 2=server, 3=create, 4=join
         self.active_task = None  # current minigame
         self.kill_cooldown = 0
