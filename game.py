@@ -510,11 +510,21 @@ def draw_lobby(screen, font, big_font):
     if gs.room.get("host") == gs.my_id:
         start_btn = font.render("[ PRESS ENTER TO START ]", True, AMBER)
         screen.blit(start_btn, (WIDTH // 2 - start_btn.get_width() // 2, y))
+        if ADMIN_MODE:
+            admin_hint = font.render("[F5] Spawn bots  |  Admin mode ON", True, (255, 100, 255))
+            screen.blit(admin_hint, (WIDTH // 2 - admin_hint.get_width() // 2, y + 30))
     else:
         ready_btn = font.render("[ PRESS R TO TOGGLE READY ]", True, AMBER)
         screen.blit(ready_btn, (WIDTH // 2 - ready_btn.get_width() // 2, y))
 
-    info = font.render(f"Players: {len(gs.room.get('players', []))}/8  |  Need 3+ to start", True, DIM_WHITE)
+    # Error message
+    if gs.error_msg:
+        err = font.render(gs.error_msg, True, RED)
+        screen.blit(err, (WIDTH // 2 - err.get_width() // 2, HEIGHT - 65))
+
+    player_count = len(gs.room.get('players', []))
+    need_text = "Admin: can start with any count" if ADMIN_MODE and gs.admin_enabled else "Need 3+ to start"
+    info = font.render(f"Players: {player_count}/8  |  {need_text}", True, DIM_WHITE)
     screen.blit(info, (WIDTH // 2 - info.get_width() // 2, HEIGHT - 40))
 
 
@@ -1002,10 +1012,13 @@ def main():
             for ev in events:
                 if ev.type == pygame.KEYDOWN:
                     if ev.key == pygame.K_RETURN and gs.room and gs.room.get("host") == gs.my_id:
-                        resp = sio.call("start", {})
-                        if resp and not resp.get("ok"):
-                            gs.error_msg = resp.get("error", "")
-                            gs.notify(gs.error_msg, 3)
+                        resp = sio.call("start", {}, timeout=5)
+                        if not resp:
+                            gs.notify("Server not responding", 3)
+                        elif not resp.get("ok"):
+                            msg = resp.get("error", "Failed to start")
+                            gs.notify(msg, 4)
+                            gs.error_msg = msg
                     elif ev.key == pygame.K_r:
                         sio.call("ready", {})
                     elif ev.key == pygame.K_ESCAPE:
