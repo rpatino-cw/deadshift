@@ -1,0 +1,138 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 360">
+  <defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0d0d1a"/>
+      <stop offset="100%" stop-color="#141428"/>
+    </linearGradient>
+    <filter id="g2">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="800" height="360" fill="url(#bg2)" rx="10"/>
+
+  <!-- Phase 1: Lobby -->
+  <g transform="translate(70,40)">
+    <rect width="130" height="100" rx="8" fill="#1a1a2e" stroke="#3498db" stroke-width="2"/>
+    <text x="65" y="20" text-anchor="middle" font-family="monospace" font-size="11" fill="#3498db" font-weight="bold">LOBBY</text>
+    <circle cx="35" cy="55" r="8" fill="#e74c3c"/>
+    <circle cx="55" cy="55" r="8" fill="#3498db"/>
+    <circle cx="75" cy="55" r="8" fill="#2ecc71"/>
+    <circle cx="95" cy="55" r="8" fill="#f39c12"/>
+    <text x="65" y="85" text-anchor="middle" font-family="monospace" font-size="9" fill="#666">Share code</text>
+    <!-- Pulse on players -->
+    <circle cx="35" cy="55" r="12" fill="none" stroke="#e74c3c" stroke-width="1" opacity="0">
+      <animate attributeName="r" values="8;16;8" dur="2s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.6;0;0.6" dur="2s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+
+  <!-- Arrow 1 -->
+  <g>
+    <line x1="210" y1="90" x2="250" y2="90" stroke="#444" stroke-width="2" marker-end="url(#arrow)"/>
+    <polygon points="250,85 260,90 250,95" fill="#444"/>
+  </g>
+
+  <!-- Phase 2: Role Reveal -->
+  <g transform="translate(270,40)">
+    <rect width="130" height="100" rx="8" fill="#1a1a2e" stroke="#e74c3c" stroke-width="2"/>
+    <text x="65" y="20" text-anchor="middle" font-family="monospace" font-size="11" fill="#e74c3c" font-weight="bold">ROLES</text>
+    <text x="65" y="52" text-anchor="middle" font-family="monospace" font-size="20" fill="#2ecc71" filter="url(#g2)">CREW</text>
+    <text x="65" y="75" text-anchor="middle" font-family="monospace" font-size="13" fill="#e74c3c" filter="url(#g2)">
+      IMPOSTOR
+      <animate attributeName="opacity" values="1;0.3;1" dur="1.5s" repeatCount="indefinite"/>
+    </text>
+    <text x="65" y="92" text-anchor="middle" font-family="monospace" font-size="8" fill="#666">Secret assignment</text>
+  </g>
+
+  <!-- Arrow 2 -->
+  <g>
+    <line x1="410" y1="90" x2="450" y2="90" stroke="#444" stroke-width="2"/>
+    <polygon points="450,85 460,90 450,95" fill="#444"/>
+  </g>
+
+  <!-- Phase 3: Gameplay -->
+  <g transform="translate(470,20)">
+    <rect width="150" height="140" rx="8" fill="#1a1a2e" stroke="#f39c12" stroke-width="2"/>
+    <text x="75" y="20" text-anchor="middle" font-family="monospace" font-size="11" fill="#f39c12" font-weight="bold">GAMEPLAY</text>
+
+    <!-- Flashlight cone -->
+    <polygon points="40,70 20,50 60,50" fill="#ffcc00" opacity="0.1">
+      <animate attributeName="opacity" values="0.1;0.2;0.1" dur="2s" repeatCount="indefinite"/>
+    </polygon>
+    <circle cx="40" cy="70" r="6" fill="#3498db">
+      <animate attributeName="cx" values="40;50;40" dur="3s" repeatCount="indefinite"/>
+    </circle>
+
+    <!-- Task icon -->
+    <rect x="80" y="45" width="20" height="20" rx="3" fill="#f39c12" opacity="0.6"/>
+    <text x="90" y="59" text-anchor="middle" font-family="monospace" font-size="9" fill="#fff">T</text>
+
+    <!-- Sabotage icon -->
+    <rect x="110" y="45" width="20" height="20" rx="3" fill="#e74c3c" opacity="0.6">
+      <animate attributeName="opacity" values="0.6;0.2;0.6" dur="1s" repeatCount="indefinite"/>
+    </rect>
+    <text x="120" y="59" text-anchor="middle" font-family="monospace" font-size="9" fill="#fff">!</text>
+
+    <text x="75" y="90" text-anchor="middle" font-family="monospace" font-size="8" fill="#2ecc71">Crew: do tasks</text>
+    <text x="75" y="102" text-anchor="middle" font-family="monospace" font-size="8" fill="#e74c3c">Impostor: sabotage</text>
+    <text x="75" y="114" text-anchor="middle" font-family="monospace" font-size="8" fill="#f39c12">Limited vision</text>
+    <text x="75" y="126" text-anchor="middle" font-family="monospace" font-size="8" fill="#9b59b6">Kill in the dark</text>
+  </g>
+
+  <!-- Arrow down from gameplay -->
+  <g>
+    <line x1="545" y1="165" x2="545" y2="195" stroke="#444" stroke-width="2"/>
+    <polygon points="540,195 545,205 550,195" fill="#444"/>
+  </g>
+
+  <!-- Phase 4: Meeting -->
+  <g transform="translate(470,210)">
+    <rect width="150" height="100" rx="8" fill="#1a1a2e" stroke="#9b59b6" stroke-width="2"/>
+    <text x="75" y="20" text-anchor="middle" font-family="monospace" font-size="11" fill="#9b59b6" font-weight="bold">MEETING</text>
+
+    <!-- Chat bubbles -->
+    <rect x="15" y="32" width="55" height="16" rx="8" fill="#2a2a4a"/>
+    <text x="42" y="43" text-anchor="middle" font-family="monospace" font-size="8" fill="#3498db">"It's red!"</text>
+    <rect x="80" y="32" width="55" height="16" rx="8" fill="#2a2a4a"/>
+    <text x="107" y="43" text-anchor="middle" font-family="monospace" font-size="8" fill="#e74c3c">"Not me!"</text>
+
+    <rect x="30" y="54" width="90" height="16" rx="8" fill="#2a2a4a"/>
+    <text x="75" y="65" text-anchor="middle" font-family="monospace" font-size="8" fill="#2ecc71">"I was at Rack B"</text>
+
+    <text x="75" y="88" text-anchor="middle" font-family="monospace" font-size="9" fill="#f39c12">VOTE TO EJECT</text>
+  </g>
+
+  <!-- Arrow back to gameplay (loop) -->
+  <g>
+    <line x1="460" y1="260" x2="400" y2="260" stroke="#444" stroke-width="1.5" stroke-dasharray="4,4"/>
+    <line x1="400" y1="260" x2="400" y2="90" stroke="#444" stroke-width="1.5" stroke-dasharray="4,4"/>
+    <line x1="400" y1="90" x2="460" y2="90" stroke="#444" stroke-width="1.5" stroke-dasharray="4,4"/>
+    <text x="385" y="180" text-anchor="end" font-family="monospace" font-size="8" fill="#555">repeat</text>
+  </g>
+
+  <!-- Phase 5: Win/Lose -->
+  <g transform="translate(660,210)">
+    <rect width="120" height="100" rx="8" fill="#1a1a2e" stroke="#2ecc71" stroke-width="2"/>
+    <text x="60" y="20" text-anchor="middle" font-family="monospace" font-size="11" fill="#2ecc71" font-weight="bold">GAME OVER</text>
+    <text x="60" y="50" text-anchor="middle" font-family="monospace" font-size="14" fill="#2ecc71" filter="url(#g2)">
+      CREW WINS
+      <animate attributeName="opacity" values="1;0;1" dur="3s" repeatCount="indefinite"/>
+    </text>
+    <text x="60" y="72" text-anchor="middle" font-family="monospace" font-size="14" fill="#e74c3c" filter="url(#g2)">
+      IMP WINS
+      <animate attributeName="opacity" values="0;1;0" dur="3s" repeatCount="indefinite"/>
+    </text>
+    <text x="60" y="92" text-anchor="middle" font-family="monospace" font-size="8" fill="#666">Roles revealed</text>
+  </g>
+
+  <!-- Arrow to game over -->
+  <g>
+    <line x1="625" y1="260" x2="655" y2="260" stroke="#444" stroke-width="2"/>
+    <polygon points="655,255 665,260 655,265" fill="#444"/>
+  </g>
+
+  <!-- Bottom labels -->
+  <text x="400" y="345" text-anchor="middle" font-family="monospace" font-size="10" fill="#444">3-8 players  |  same WiFi  |  ~10 min per round</text>
+</svg>

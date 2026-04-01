@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 280">
+  <defs>
+    <linearGradient id="bg5" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0d0d1a"/>
+      <stop offset="100%" stop-color="#141428"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="800" height="280" fill="url(#bg5)" rx="10"/>
+
+  <!-- Title -->
+  <text x="400" y="30" text-anchor="middle" font-family="monospace" font-size="14" fill="#f39c12" font-weight="bold" letter-spacing="2">QUICK START</text>
+
+  <!-- HOST side -->
+  <g transform="translate(30,50)">
+    <rect width="355" height="210" rx="8" fill="#0d1a2e" stroke="#3498db" stroke-width="1.5"/>
+    <text x="177" y="25" text-anchor="middle" font-family="monospace" font-size="13" fill="#3498db" font-weight="bold">HOST (runs server + plays)</text>
+
+    <!-- Terminal mockup -->
+    <rect x="15" y="38" width="325" height="155" rx="6" fill="#0a0a14"/>
+    <circle cx="28" cy="48" r="4" fill="#e74c3c"/>
+    <circle cx="40" cy="48" r="4" fill="#f39c12"/>
+    <circle cx="52" cy="48" r="4" fill="#2ecc71"/>
+
+    <text x="25" y="72" font-family="monospace" font-size="10" fill="#2ecc71">$</text>
+    <text x="38" y="72" font-family="monospace" font-size="10" fill="#ddd">git clone https://github.com/rpatino-cw/deadshift</text>
+
+    <text x="25" y="92" font-family="monospace" font-size="10" fill="#2ecc71">$</text>
+    <text x="38" y="92" font-family="monospace" font-size="10" fill="#ddd">cd deadshift &amp;&amp; npm install</text>
+
+    <text x="25" y="112" font-family="monospace" font-size="10" fill="#2ecc71">$</text>
+    <text x="38" y="112" font-family="monospace" font-size="10" fill="#ddd">node server.js &amp;</text>
+
+    <text x="25" y="132" font-family="monospace" font-size="10" fill="#3498db">DEADSHIFT server on 192.168.1.51:3000</text>
+
+    <text x="25" y="155" font-family="monospace" font-size="10" fill="#2ecc71">$</text>
+    <text x="38" y="155" font-family="monospace" font-size="10" fill="#ddd">pip install -r requirements.txt</text>
+
+    <text x="25" y="175" font-family="monospace" font-size="10" fill="#2ecc71">$</text>
+    <text x="38" y="175" font-family="monospace" font-size="10" fill="#f39c12">python3 game.py</text>
+
+    <!-- Blinking cursor -->
+    <rect x="148" y="167" width="7" height="12" fill="#2ecc71">
+      <animate attributeName="opacity" values="1;0;1" dur="1s" repeatCount="indefinite"/>
+    </rect>
+  </g>
+
+  <!-- Arrow -->
+  <text x="400" y="165" text-anchor="middle" font-family="monospace" font-size="20" fill="#444">+</text>
+
+  <!-- PLAYER side -->
+  <g transform="translate(415,50)">
+    <rect width="355" height="210" rx="8" fill="#0d1a0d" stroke="#2ecc71" stroke-width="1.5"/>
+    <text x="177" y="25" text-anchor="middle" font-family="monospace" font-size="13" fill="#2ecc71" font-weight="bold">PLAYERS (everyone else)</text>
+
+    <!-- Terminal mockup -->
+    <rect x="15" y="38" width="325" height="155" rx="6" fill="#0a0a14"/>
+    <circle cx="28" cy="48" r="4" fill="#e74c3c"/>
+    <circle cx="40" cy="48" r="4" fill="#f39c12"/>
+    <circle cx="52" cy="48" r="4" fill="#2ecc71"/>
+
+    <text x="25" y="72" font-family="monospace" font-size="10" fill="#2ecc71">$</text>
+    <text x="38" y="72" font-family="monospace" font-size="10" fill="#ddd">git clone https://github.com/rpatino-cw/deadshift</text>
+
+    <text x="25" y="92" font-family="monospace" font-size="10" fill="#2ecc71">$</text>
+    <text x="38" y="92" font-family="monospace" font-size="10" fill="#ddd">cd deadshift</text>
+
+    <text x="25" y="112" font-family="monospace" font-size="10" fill="#2ecc71">$</text>
+    <text x="38" y="112" font-family="monospace" font-size="10" fill="#ddd">pip install -r requirements.txt</text>
+
+    <text x="25" y="135" font-family="monospace" font-size="10" fill="#2ecc71">$</text>
+    <text x="38" y="135" font-family="monospace" font-size="10" fill="#f39c12">python3 game.py</text>
+
+    <!-- Blinking cursor -->
+    <rect x="148" y="127" width="7" height="12" fill="#2ecc71">
+      <animate attributeName="opacity" values="1;0;1" dur="1s" repeatCount="indefinite"/>
+    </rect>
+
+    <text x="25" y="162" font-family="monospace" font-size="10" fill="#888">Enter host IP: 192.168.1.51:3000</text>
+    <text x="25" y="178" font-family="monospace" font-size="10" fill="#888">Enter room code: AB3K</text>
+  </g>
+</svg>
