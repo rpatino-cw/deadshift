@@ -1095,6 +1095,9 @@ def main():
                                 if resp and resp.get("ok"):
                                     gs.kill_cooldown = 25  # 25 sec cooldown
                                     gs.notify(f"Eliminated {target['name']}!", 2)
+                        elif ev.key == pygame.K_ESCAPE:
+                            sio.emit("leave")
+                            gs.phase = "menu"
 
                 draw_game(screen, font)
 
