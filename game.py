@@ -4,9 +4,13 @@
 import sys
 import math
 import time
+import json
+import socket
 import threading
 import socketio
 import pygame
+from OpenGL.GL import glClear, GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT
+from renderer3d import Renderer3D, blit_surface_to_screen, begin_2d_mode
 
 ADMIN_MODE = "--admin" in sys.argv or "-a" in sys.argv
 
@@ -71,14 +75,18 @@ class GameState:
         self.vote_players = []
         self.vote_cast = False
         self.vote_result = None
+        self.voters_done = set()
         self.winner = None
+        self.gameover_players = []
         self.effects = []  # visual effects: [{type, x, y, t}]
         self.notification = None
         self.notification_time = 0
         self.name_input = ""
         self.code_input = ""
         self.server_input = _SERVER_OVERRIDE or "localhost:3000"
-        self.menu_cursor = 0  # 0=name, 1=code, 2=server, 3=create, 4=join
+        self.menu_cursor = 0  # browse: 0=name, 1=create, 2+=rooms | manual: 0=name, 1=code, 2=server, 3=create, 4=join
+        self.manual_mode = bool(_SERVER_OVERRIDE)  # auto-manual if --server flag used
+        self.discovered_servers = {}  # key: "ip:port", value: {ip, port, rooms, last_seen}
         self.active_task = None  # current minigame
         self.kill_cooldown = 0
         self.meeting_end_time = 0
@@ -365,6 +373,7 @@ def on_voting_started(data):
     gs.phase = "voting"
     gs.vote_players = data.get("players", [])
     gs.vote_cast = False
+    gs.voters_done = set()
     gs.vote_end_time = time.time() + data.get("duration", 15000) / 1000
 
 @sio.on("chat:message")
@@ -375,7 +384,7 @@ def on_chat_message(data):
 
 @sio.on("vote:cast")
 def on_vote_cast(data):
-    pass  # could show a checkmark
+    gs.voters_done.add(data.get("voter"))
 
 @sio.on("vote:result")
 def on_vote_result(data):
@@ -390,9 +399,21 @@ def on_vote_result(data):
 def on_game_over(data):
     gs.phase = "gameover"
     gs.winner = data.get("winner")
+    gs.gameover_players = data.get("allPlayers", [])
     impostors = data.get("impostors", [])
     names = ", ".join(i["name"] for i in impostors)
     gs.notify(f"{'CREW' if gs.winner == 'crew' else 'IMPOSTOR'} WINS! Impostor: {names}", 10)
+
+@sio.on("game:lobby")
+def on_game_lobby(data):
+    gs.room = data.get("room")
+    gs.phase = "lobby"
+    gs.my_role = None
+    gs.my_tasks = []
+    gs.dead_players = []
+    gs.effects = []
+    gs.gameover_players = []
+    gs.notify("Back in lobby — ready up for rematch!", 4)
 
 @sio.on("kicked")
 def on_kicked():
@@ -432,51 +453,98 @@ def connect_and_join(server, name, code):
         gs.error_msg = str(e)[:60]
 
 
+def browse_join(ip, port, code, name):
+    """Join a discovered room directly."""
+    connect_and_join(f"{ip}:{port}", name, code)
+
+
 # ── Drawing ─────────────────────────────────────────────────────────
 def draw_menu(screen, font, big_font):
     screen.fill((10, 10, 20))
 
     # Title
     title = big_font.render("DEADSHIFT", True, RED)
-    screen.blit(title, (WIDTH // 2 - title.get_width() // 2, 60))
+    screen.blit(title, (WIDTH // 2 - title.get_width() // 2, 40))
     sub = font.render("Local Multiplayer Social Deduction", True, DIM_WHITE)
-    screen.blit(sub, (WIDTH // 2 - sub.get_width() // 2, 110))
+    screen.blit(sub, (WIDTH // 2 - sub.get_width() // 2, 85))
 
     cx = WIDTH // 2
-    y = 180
+    y = 130
 
-    fields = [
-        ("Name", gs.name_input, 0),
-        ("Room Code", gs.code_input, 1),
-        ("Server", gs.server_input, 2),
-    ]
+    # Name field (always shown)
+    name_color = AMBER if gs.menu_cursor == 0 else WHITE
+    lbl = font.render("Name:", True, name_color)
+    screen.blit(lbl, (cx - 160, y))
+    box = pygame.Rect(cx - 10, y - 4, 200, 28)
+    pygame.draw.rect(screen, DARK_GRAY, box)
+    pygame.draw.rect(screen, AMBER if gs.menu_cursor == 0 else GRAY, box, 1)
+    val = font.render(gs.name_input + ("_" if gs.menu_cursor == 0 else ""), True, WHITE)
+    screen.blit(val, (cx - 5, y))
+    y += 45
 
-    for label, value, idx in fields:
-        color = AMBER if gs.menu_cursor == idx else WHITE
-        lbl = font.render(f"{label}:", True, color)
-        screen.blit(lbl, (cx - 160, y))
-        box = pygame.Rect(cx - 10, y - 4, 200, 28)
-        pygame.draw.rect(screen, DARK_GRAY, box)
-        border_color = AMBER if gs.menu_cursor == idx else GRAY
-        pygame.draw.rect(screen, border_color, box, 1)
-        val = font.render(value + ("_" if gs.menu_cursor == idx else ""), True, WHITE)
-        screen.blit(val, (cx - 5, y))
-        y += 50
+    if gs.manual_mode:
+        # ── Manual mode: IP + Code + Create + Join ──
+        fields = [("Room Code", gs.code_input, 1), ("Server", gs.server_input, 2)]
+        for label, value, idx in fields:
+            color = AMBER if gs.menu_cursor == idx else WHITE
+            lbl = font.render(f"{label}:", True, color)
+            screen.blit(lbl, (cx - 160, y))
+            fbox = pygame.Rect(cx - 10, y - 4, 200, 28)
+            pygame.draw.rect(screen, DARK_GRAY, fbox)
+            pygame.draw.rect(screen, AMBER if gs.menu_cursor == idx else GRAY, fbox, 1)
+            fval = font.render(value + ("_" if gs.menu_cursor == idx else ""), True, WHITE)
+            screen.blit(fval, (cx - 5, y))
+            y += 45
 
-    # Buttons
-    for i, (label, idx) in enumerate([("[ CREATE ROOM ]", 3), ("[ JOIN ROOM ]", 4)]):
-        color = AMBER if gs.menu_cursor == idx else WHITE
-        btn = font.render(label, True, color)
-        screen.blit(btn, (cx - btn.get_width() // 2, y + i * 45))
+        for i, (label, idx) in enumerate([("[ CREATE ROOM ]", 3), ("[ JOIN ROOM ]", 4)]):
+            color = AMBER if gs.menu_cursor == idx else WHITE
+            btn = font.render(label, True, color)
+            screen.blit(btn, (cx - btn.get_width() // 2, y + i * 40))
+
+        inst = font.render("[TAB] browse LAN  |  Type to fill  |  ENTER=select", True, DIM_WHITE)
+        screen.blit(inst, (cx - inst.get_width() // 2, HEIGHT - 40))
+    else:
+        # ── Browse mode: Create + discovered rooms ──
+        create_color = AMBER if gs.menu_cursor == 1 else WHITE
+        create_btn = font.render("[ CREATE ROOM ]", True, create_color)
+        screen.blit(create_btn, (cx - create_btn.get_width() // 2, y))
+        host_hint = font.render("(hosts on this machine)", True, DIM_WHITE)
+        screen.blit(host_hint, (cx - host_hint.get_width() // 2, y + 22))
+        y += 55
+
+        # Divider
+        pygame.draw.line(screen, GRAY, (cx - 200, y), (cx + 200, y), 1)
+        header = font.render("Available Games", True, AMBER)
+        screen.blit(header, (cx - header.get_width() // 2, y + 8))
+        y += 35
+
+        discovered = get_discovered_rooms()
+        if discovered:
+            for i, (ip, port, room) in enumerate(discovered[:7]):
+                idx = i + 2  # cursor indices 2+ are rooms
+                selected = gs.menu_cursor == idx
+                color = AMBER if selected else WHITE
+                code = room.get("code", "????")
+                count = room.get("players", 0)
+                maxp = room.get("maxPlayers", 8)
+                line = f"  {i + 1}. {code}   {count}/{maxp} players   {ip}"
+                row = font.render(line, True, color)
+                if selected:
+                    highlight = pygame.Rect(cx - 210, y - 2, 420, 24)
+                    pygame.draw.rect(screen, (30, 30, 50), highlight)
+                screen.blit(row, (cx - 200, y))
+                y += 28
+        else:
+            scanning = font.render("Scanning LAN...", True, DIM_WHITE)
+            screen.blit(scanning, (cx - scanning.get_width() // 2, y + 10))
+
+        inst = font.render("[TAB] manual join  |  1-9=quick join  |  ENTER=select", True, DIM_WHITE)
+        screen.blit(inst, (cx - inst.get_width() // 2, HEIGHT - 40))
 
     # Error
     if gs.error_msg:
         err = font.render(gs.error_msg, True, RED)
-        screen.blit(err, (cx - err.get_width() // 2, y + 120))
-
-    # Instructions
-    inst = font.render("TAB=next field  ENTER=select  Type to fill", True, DIM_WHITE)
-    screen.blit(inst, (cx - inst.get_width() // 2, HEIGHT - 40))
+        screen.blit(err, (cx - err.get_width() // 2, HEIGHT - 65))
 
 
 def draw_lobby(screen, font, big_font):
@@ -642,6 +710,9 @@ def draw_game(screen, font):
         screen.blit(fog, (0, 0))
 
     # ── HUD ───────────────────────────────────────────────────────
+    # Minimap
+    draw_minimap(screen, gs)
+
     # Role badge
     role_color = RED if gs.my_role == "impostor" else GREEN
     role_text = "IMPOSTOR" if gs.my_role == "impostor" else "CREW"
@@ -684,11 +755,15 @@ def draw_game(screen, font):
         screen.blit(prompt, (WIDTH // 2 - prompt.get_width() // 2, HEIGHT // 2 + 50))
 
     # Kill prompt (impostor)
-    if gs.my_role == "impostor" and gs.kill_cooldown <= 0:
-        target = get_nearby_kill_target()
-        if target:
-            prompt = font.render(f"[Q] Kill {target['name']}", True, RED)
-            screen.blit(prompt, (WIDTH // 2 - prompt.get_width() // 2, HEIGHT // 2 + 75))
+    if gs.my_role == "impostor":
+        if gs.kill_cooldown > 0:
+            cd_text = font.render(f"Kill cooldown: {int(gs.kill_cooldown)}s", True, DIM_WHITE)
+            screen.blit(cd_text, (WIDTH // 2 - cd_text.get_width() // 2, HEIGHT // 2 + 75))
+        else:
+            target = get_nearby_kill_target()
+            if target:
+                prompt = font.render(f"[Q] Kill {target['name']}", True, RED)
+                screen.blit(prompt, (WIDTH // 2 - prompt.get_width() // 2, HEIGHT // 2 + 75))
 
 
 def draw_meeting(screen, font, big_font):
@@ -746,6 +821,9 @@ def draw_voting(screen, font, big_font):
         pygame.draw.circle(screen, color, (rect.x + 18, rect.y + 18), 10)
         label = font.render(p.get("name", "???"), True, WHITE)
         screen.blit(label, (rect.x + 38, rect.y + 7))
+        if p.get("id") in gs.voters_done:
+            voted_mark = font.render("V", True, GREEN)
+            screen.blit(voted_mark, (rect.x + rect.width - 50, rect.y + 7))
         key_hint = font.render(str(i + 1), True, AMBER)
         screen.blit(key_hint, (rect.x + rect.width - 25, rect.y + 7))
         y += 42
@@ -777,10 +855,29 @@ def draw_gameover(screen, font, big_font):
     winner_text = "CREW WINS!" if gs.winner == "crew" else "IMPOSTOR WINS!"
     color = GREEN if gs.winner == "crew" else RED
     title = big_font.render(winner_text, True, color)
-    screen.blit(title, (WIDTH // 2 - title.get_width() // 2, HEIGHT // 2 - 60))
+    screen.blit(title, (WIDTH // 2 - title.get_width() // 2, 60))
+
+    # Role reveal
+    y = 130
+    header = font.render("ROLE REVEAL", True, AMBER)
+    screen.blit(header, (WIDTH // 2 - header.get_width() // 2, y))
+    y += 30
+    for p in gs.gameover_players:
+        p_color = hex_to_rgb(p.get("color", "#ffffff"))
+        role = p.get("role", "?").upper()
+        role_color = RED if role == "IMPOSTOR" else GREEN
+        alive_text = "" if p.get("alive") else " (DEAD)"
+        dot = pygame.Surface((16, 16), pygame.SRCALPHA)
+        pygame.draw.circle(dot, p_color, (8, 8), 8)
+        screen.blit(dot, (WIDTH // 2 - 120, y))
+        name_surf = font.render(f"{p.get('name', '???')}", True, WHITE)
+        screen.blit(name_surf, (WIDTH // 2 - 98, y))
+        role_surf = font.render(f"{role}{alive_text}", True, role_color)
+        screen.blit(role_surf, (WIDTH // 2 + 60, y))
+        y += 28
 
     hint = font.render("Press ENTER to return to lobby", True, DIM_WHITE)
-    screen.blit(hint, (WIDTH // 2 - hint.get_width() // 2, HEIGHT // 2 + 20))
+    screen.blit(hint, (WIDTH // 2 - hint.get_width() // 2, HEIGHT - 50))
 
 
 def draw_admin_panel(screen, font):
@@ -896,6 +993,59 @@ def draw_notification(screen, font):
         screen.blit(text, (WIDTH // 2 - text.get_width() // 2, 15))
 
 
+# ── Minimap ────────────────────────────────────────────────────────
+MINIMAP_W, MINIMAP_H = 140, 105  # 4:3 ratio matching 1600:1200
+
+def draw_minimap(surface, gs):
+    """Draw a small radar minimap in the bottom-right corner."""
+    mx = WIDTH - MINIMAP_W - 10
+    my = HEIGHT - MINIMAP_H - 35  # above the controls hint
+    sx = MINIMAP_W / MAP_W
+    sy = MINIMAP_H / MAP_H
+    am_alive = gs.my_id not in gs.dead_players
+
+    # Background
+    mm_rect = pygame.Rect(mx, my, MINIMAP_W, MINIMAP_H)
+    mm_bg = pygame.Surface((MINIMAP_W, MINIMAP_H), pygame.SRCALPHA)
+    mm_bg.fill((0, 0, 0, 150))
+    surface.blit(mm_bg, (mx, my))
+
+    # Task stations (yellow dots for pending tasks)
+    for station in gs.task_stations:
+        has_task = any(t["stationId"] == station["id"] and not t.get("done") for t in gs.my_tasks)
+        color = YELLOW if has_task else (40, 40, 50)
+        pygame.draw.circle(surface, color, (int(mx + station["x"] * sx), int(my + station["y"] * sy)), 2)
+
+    # Sabotage stations (impostor only)
+    if gs.my_role == "impostor":
+        for station in gs.sabotage_stations:
+            done = station["id"] in gs.active_sabotages
+            color = (60, 20, 20) if done else RED
+            pygame.draw.circle(surface, color, (int(mx + station["x"] * sx), int(my + station["y"] * sy)), 2)
+
+    # Meeting button
+    if gs.meeting_button:
+        bx = int(mx + gs.meeting_button["x"] * sx)
+        by = int(my + gs.meeting_button["y"] * sy)
+        pygame.draw.circle(surface, (150, 30, 30), (bx, by), 3, 1)
+
+    # Other visible players
+    for pid, p in gs.positions.items():
+        if pid == gs.my_id or not p.get("alive", True):
+            continue
+        dist = math.hypot(p["x"] - gs.my_x, p["y"] - gs.my_y)
+        if am_alive and not gs.no_fog and dist > FLASHLIGHT_RADIUS * 1.5:
+            continue
+        color = hex_to_rgb(p.get("color", "#ffffff"))
+        pygame.draw.circle(surface, color, (int(mx + p["x"] * sx), int(my + p["y"] * sy)), 2)
+
+    # My position (bright white, slightly larger)
+    pygame.draw.circle(surface, WHITE, (int(mx + gs.my_x * sx), int(my + gs.my_y * sy)), 3)
+
+    # Border
+    pygame.draw.rect(surface, (60, 60, 80), mm_rect, 1)
+
+
 # ── Interaction Helpers ─────────────────────────────────────────────
 def get_nearby_interactable():
     """Find the nearest interactable thing."""
@@ -948,14 +1098,69 @@ def get_nearby_kill_target():
     return best
 
 
+# ── LAN Discovery ──────────────────────────────────────────────────
+BEACON_PORT = 3001
+BEACON_STALE = 6  # seconds before a server is considered gone
+
+def udp_listener():
+    """Background thread: listen for server UDP beacons on LAN."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    except AttributeError:
+        pass
+    sock.bind(("", BEACON_PORT))
+    sock.settimeout(1.0)
+    while True:
+        try:
+            data, addr = sock.recvfrom(4096)
+            info = json.loads(data.decode())
+            if info.get("name") != "DEADSHIFT":
+                continue
+            key = f"{info['ip']}:{info['port']}"
+            gs.discovered_servers[key] = {
+                "ip": info["ip"], "port": info["port"],
+                "rooms": info.get("rooms", []),
+                "last_seen": time.time(),
+            }
+        except socket.timeout:
+            pass
+        except Exception:
+            pass
+        # Prune stale servers
+        now = time.time()
+        gs.discovered_servers = {
+            k: v for k, v in gs.discovered_servers.items()
+            if now - v["last_seen"] < BEACON_STALE
+        }
+
+
+def get_discovered_rooms():
+    """Flatten discovered servers into a list of (ip, port, room) tuples."""
+    result = []
+    for srv in gs.discovered_servers.values():
+        for room in srv.get("rooms", []):
+            result.append((srv["ip"], srv["port"], room))
+    return result
+
+
 # ── Main Loop ───────────────────────────────────────────────────────
 def main():
     pygame.init()
-    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.OPENGL | pygame.DOUBLEBUF)
     pygame.display.set_caption("DEADSHIFT")
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("monospace", FONT_SIZE)
     big_font = pygame.font.SysFont("monospace", 42, bold=True)
+
+    # Off-screen surface for 2D phases (menu, lobby, meeting, etc.)
+    surf2d = pygame.Surface((WIDTH, HEIGHT))
+    overlay2d = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+    renderer = Renderer3D(WIDTH, HEIGHT)
+
+    # Start LAN discovery
+    threading.Thread(target=udp_listener, daemon=True).start()
 
     running = True
     last_move_send = 0
@@ -979,33 +1184,78 @@ def main():
             for ev in events:
                 if ev.type == pygame.KEYDOWN:
                     gs.error_msg = ""
+
                     if ev.key == pygame.K_TAB:
-                        gs.menu_cursor = (gs.menu_cursor + 1) % 5
+                        if gs.manual_mode:
+                            # In manual mode: cycle fields (0=name,1=code,2=server,3=create,4=join)
+                            gs.menu_cursor = (gs.menu_cursor + 1) % 5
+                        else:
+                            # TAB toggles between browse and manual
+                            gs.manual_mode = not gs.manual_mode
+                            gs.menu_cursor = 0
+
+                    elif ev.key in (pygame.K_UP, pygame.K_DOWN) and not gs.manual_mode:
+                        discovered = get_discovered_rooms()
+                        max_idx = 1 + len(discovered)  # 0=name, 1=create, 2+=rooms
+                        if ev.key == pygame.K_DOWN:
+                            gs.menu_cursor = min(gs.menu_cursor + 1, max_idx)
+                        else:
+                            gs.menu_cursor = max(gs.menu_cursor - 1, 0)
+
                     elif ev.key == pygame.K_RETURN:
-                        if gs.menu_cursor == 3:  # Create
-                            threading.Thread(target=connect_and_create,
-                                             args=(gs.server_input, gs.name_input or "Player"),
-                                             daemon=True).start()
-                        elif gs.menu_cursor == 4:  # Join
-                            threading.Thread(target=connect_and_join,
-                                             args=(gs.server_input, gs.name_input or "Player", gs.code_input),
-                                             daemon=True).start()
+                        if gs.manual_mode:
+                            if gs.menu_cursor == 3:  # Create
+                                threading.Thread(target=connect_and_create,
+                                                 args=(gs.server_input, gs.name_input or "Player"),
+                                                 daemon=True).start()
+                            elif gs.menu_cursor == 4:  # Join
+                                threading.Thread(target=connect_and_join,
+                                                 args=(gs.server_input, gs.name_input or "Player", gs.code_input),
+                                                 daemon=True).start()
+                        else:
+                            if gs.menu_cursor == 1:  # Create
+                                threading.Thread(target=connect_and_create,
+                                                 args=(gs.server_input, gs.name_input or "Player"),
+                                                 daemon=True).start()
+                            elif gs.menu_cursor >= 2:  # Join discovered room
+                                discovered = get_discovered_rooms()
+                                idx = gs.menu_cursor - 2
+                                if 0 <= idx < len(discovered):
+                                    ip, port, room = discovered[idx]
+                                    threading.Thread(target=browse_join,
+                                                     args=(ip, port, room["code"], gs.name_input or "Player"),
+                                                     daemon=True).start()
+
                     elif ev.key == pygame.K_BACKSPACE:
                         if gs.menu_cursor == 0:
                             gs.name_input = gs.name_input[:-1]
-                        elif gs.menu_cursor == 1:
-                            gs.code_input = gs.code_input[:-1]
-                        elif gs.menu_cursor == 2:
-                            gs.server_input = gs.server_input[:-1]
+                        elif gs.manual_mode:
+                            if gs.menu_cursor == 1:
+                                gs.code_input = gs.code_input[:-1]
+                            elif gs.menu_cursor == 2:
+                                gs.server_input = gs.server_input[:-1]
+
                     elif ev.unicode and ev.unicode.isprintable():
                         if gs.menu_cursor == 0 and len(gs.name_input) < 16:
                             gs.name_input += ev.unicode
-                        elif gs.menu_cursor == 1 and len(gs.code_input) < 6:
-                            gs.code_input += ev.unicode.upper()
-                        elif gs.menu_cursor == 2 and len(gs.server_input) < 30:
-                            gs.server_input += ev.unicode
+                        elif gs.manual_mode:
+                            if gs.menu_cursor == 1 and len(gs.code_input) < 6:
+                                gs.code_input += ev.unicode.upper()
+                            elif gs.menu_cursor == 2 and len(gs.server_input) < 30:
+                                gs.server_input += ev.unicode
+                        elif not gs.manual_mode and ev.unicode.isdigit() and ev.unicode != "0":
+                            # Quick join: press 1-9 to join discovered room
+                            discovered = get_discovered_rooms()
+                            idx = int(ev.unicode) - 1
+                            if 0 <= idx < len(discovered):
+                                ip, port, room = discovered[idx]
+                                threading.Thread(target=browse_join,
+                                                 args=(ip, port, room["code"], gs.name_input or "Player"),
+                                                 daemon=True).start()
 
-            draw_menu(screen, font, big_font)
+            draw_menu(surf2d, font, big_font)
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+            blit_surface_to_screen(surf2d, WIDTH, HEIGHT)
 
         # ── LOBBY ─────────────────────────────────────────────────
         elif gs.phase == "lobby":
@@ -1024,7 +1274,9 @@ def main():
                     elif ev.key == pygame.K_ESCAPE:
                         sio.emit("leave")
                         gs.phase = "menu"
-            draw_lobby(screen, font, big_font)
+            draw_lobby(surf2d, font, big_font)
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+            blit_surface_to_screen(surf2d, WIDTH, HEIGHT)
 
         # ── PLAYING ───────────────────────────────────────────────
         elif gs.phase == "playing":
@@ -1041,9 +1293,11 @@ def main():
                     if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
                         gs.active_task = None
 
-                draw_game(screen, font)
+                renderer.draw_game(gs, font, get_nearby_interactable, get_nearby_kill_target, draw_minimap)
                 if gs.active_task:
-                    gs.active_task.draw(screen, font)
+                    overlay2d.fill((0, 0, 0, 0))
+                    gs.active_task.draw(overlay2d, font)
+                    blit_surface_to_screen(overlay2d, WIDTH, HEIGHT)
             else:
                 # Movement
                 if am_alive:
@@ -1099,7 +1353,7 @@ def main():
                             sio.emit("leave")
                             gs.phase = "menu"
 
-                draw_game(screen, font)
+                renderer.draw_game(gs, font, get_nearby_interactable, get_nearby_kill_target, draw_minimap)
 
         # ── MEETING ───────────────────────────────────────────────
         elif gs.phase == "meeting":
@@ -1113,7 +1367,9 @@ def main():
                         gs.chat_input = gs.chat_input[:-1]
                     elif ev.unicode and ev.unicode.isprintable() and len(gs.chat_input) < 150:
                         gs.chat_input += ev.unicode
-            draw_meeting(screen, font, big_font)
+            draw_meeting(surf2d, font, big_font)
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+            blit_surface_to_screen(surf2d, WIDTH, HEIGHT)
 
         # ── VOTING ────────────────────────────────────────────────
         elif gs.phase == "voting":
@@ -1127,20 +1383,27 @@ def main():
                         if 0 <= idx < len(gs.vote_players):
                             sio.call("vote", {"targetId": gs.vote_players[idx]["id"]})
                             gs.vote_cast = True
-            draw_voting(screen, font, big_font)
+            draw_voting(surf2d, font, big_font)
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+            blit_surface_to_screen(surf2d, WIDTH, HEIGHT)
 
         # ── GAME OVER ─────────────────────────────────────────────
         elif gs.phase == "gameover":
             for ev in events:
                 if ev.type == pygame.KEYDOWN and ev.key == pygame.K_RETURN:
-                    gs.phase = "menu"
                     if sio.connected:
-                        sio.emit("leave")
-            draw_gameover(screen, font, big_font)
+                        sio.call("restart", {})
+                    else:
+                        gs.phase = "menu"
+            draw_gameover(surf2d, font, big_font)
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+            blit_surface_to_screen(surf2d, WIDTH, HEIGHT)
 
-        # Admin + Notification overlays
-        draw_admin_panel(screen, font)
-        draw_notification(screen, font)
+        # Admin + Notification overlays (rendered as 2D overlay on top of everything)
+        overlay2d.fill((0, 0, 0, 0))
+        draw_admin_panel(overlay2d, font)
+        draw_notification(overlay2d, font)
+        blit_surface_to_screen(overlay2d, WIDTH, HEIGHT)
         pygame.display.flip()
 
     pygame.quit()

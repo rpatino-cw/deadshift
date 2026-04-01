@@ -1,4 +1,5 @@
 const http = require("http");
+const dgram = require("dgram");
 const { Server } = require("socket.io");
 const os = require("os");
 
@@ -162,9 +163,9 @@ io.on("connection", (socket) => {
     if (currentRoom) return ack?.({ error: "Already in a room" });
     const code = makeCode();
     const player = {
-      id: socket.id, name: name || "Host", color: COLORS[0],
+      id: socket.id, name: (name || "Host").slice(0, 16).trim() || "Host", color: COLORS[0],
       ready: false, alive: true, role: null, tasks: [],
-      x: MAP_W / 2, y: MAP_H / 2,
+      x: MAP_W / 2, y: MAP_H / 2, lastKillTime: 0,
     };
     const room = {
       code, host: socket.id, maxPlayers,
@@ -191,10 +192,10 @@ io.on("connection", (socket) => {
 
     const colorIdx = room.players.size % COLORS.length;
     const player = {
-      id: socket.id, name: name || `Player${room.players.size + 1}`,
+      id: socket.id, name: (name || `Player${room.players.size + 1}`).slice(0, 16).trim() || `Player${room.players.size + 1}`,
       color: COLORS[colorIdx], ready: false, alive: true, role: null, tasks: [],
       x: MAP_W / 2 + (Math.random() - 0.5) * 200,
-      y: MAP_H / 2 + (Math.random() - 0.5) * 200,
+      y: MAP_H / 2 + (Math.random() - 0.5) * 200, lastKillTime: 0,
     };
     room.players.set(socket.id, player);
     socket.join(code);
@@ -372,11 +373,14 @@ io.on("connection", (socket) => {
       return ack?.({ error: "Invalid target" });
 
     if (!room.godMode) {
+      if (Date.now() - player.lastKillTime < 25000)
+        return ack?.({ error: "Kill on cooldown" });
       const dist = Math.hypot(player.x - target.x, player.y - target.y);
       if (dist > INTERACT_RADIUS) return ack?.({ error: "Too far" });
     }
 
     target.alive = false;
+    player.lastKillTime = Date.now();
     console.log(`  ${player.name} KILLED ${target.name}`);
 
     // Notify the killed player
@@ -540,6 +544,40 @@ io.on("connection", (socket) => {
     ack?.({ ok: true, godMode: room.godMode });
   });
 
+  // ── RESTART (return to lobby) ────────────────────────────────────
+  socket.on("restart", (_, ack) => {
+    if (!currentRoom) return ack?.({ error: "Not in a room" });
+    const room = rooms.get(currentRoom);
+    if (!room) return ack?.({ error: "Room not found" });
+    if (room.phase !== "gameover") return ack?.({ error: "Game not over" });
+
+    clearInterval(room.tickInterval);
+    clearTimeout(room.meetingTimer);
+    room.phase = "lobby";
+    room.completedTasks = 0;
+    room.totalCrewTasks = 0;
+    room.sabotagesDone = 0;
+    room.activeSabotages = new Set();
+    room.votes = new Map();
+    room.chatLog = [];
+    room.winner = null;
+    room.godMode = false;
+
+    for (const [, p] of room.players) {
+      p.role = null;
+      p.tasks = [];
+      p.alive = true;
+      p.ready = p.id === room.host;
+      p.x = MAP_W / 2 + (Math.random() - 0.5) * 200;
+      p.y = MAP_H / 2 + (Math.random() - 0.5) * 200;
+      p.lastKillTime = 0;
+    }
+
+    io.to(room.code).emit("game:lobby", { room: roomSnapshot(room) });
+    console.log(`  Room ${room.code} restarted → lobby`);
+    ack?.({ ok: true });
+  });
+
   // ── DISCONNECT / LEAVE ─────────────────────────────────────────
   socket.on("leave", (_, ack) => { leaveRoom(); ack?.({ ok: true }); });
   socket.on("disconnect", () => { console.log(`- ${socket.id}`); leaveRoom(); });
@@ -678,9 +716,14 @@ io.on("connection", (socket) => {
       .filter((p) => p.role === "impostor")
       .map((p) => ({ name: p.name, color: p.color }));
 
+    const allPlayers = [...room.players.values()].map((p) => ({
+      id: p.id, name: p.name, color: p.color, role: p.role, alive: p.alive,
+    }));
+
     io.to(room.code).emit("game:over", {
       winner: room.winner,
       impostors,
+      allPlayers,
       room: roomSnapshot(room),
     });
     console.log(`  GAME OVER: ${room.winner} wins in ${room.code}`);
@@ -697,9 +740,32 @@ function broadcastPositions(room) {
 }
 
 // ── Start ──────────────────────────────────────────────────────────
-server.listen(PORT, "0.0.0.0", () => {
-  const ip = getLocalIP();
-  console.log(`\n  ⚡ DEADSHIFT server`);
-  console.log(`  Local:   http://localhost:${PORT}`);
-  console.log(`  Network: http://${ip}:${PORT}\n`);
-});
+if (require.main === module) {
+  server.listen(PORT, "0.0.0.0", () => {
+    const ip = getLocalIP();
+    console.log(`\n  ⚡ DEADSHIFT server`);
+    console.log(`  Local:   http://localhost:${PORT}`);
+    console.log(`  Network: http://${ip}:${PORT}`);
+
+    // UDP broadcast beacon for LAN discovery
+    const BEACON_PORT = 3001;
+    const beacon = dgram.createSocket({ type: "udp4", reuseAddr: true });
+    beacon.bind(() => {
+      beacon.setBroadcast(true);
+      setInterval(() => {
+        const lobbyRooms = [...rooms.values()]
+          .filter((r) => r.phase === "lobby" && r.players.size < r.maxPlayers)
+          .map((r) => ({ code: r.code, players: r.players.size, maxPlayers: r.maxPlayers }));
+        const msg = JSON.stringify({ name: "DEADSHIFT", ip, port: PORT, rooms: lobbyRooms });
+        beacon.send(msg, BEACON_PORT, "255.255.255.255");
+      }, 2000);
+      console.log(`  Beacon:  UDP broadcast on port ${BEACON_PORT}\n`);
+    });
+  });
+}
+
+// ── Exports (for tests) ───────────────────────────────────────────
+module.exports = {
+  makeCode, shuffle, assignTasks, roomSnapshot, fullStateFor, checkWinCondition,
+  TASK_STATIONS, SABOTAGE_STATIONS, MAP_W, MAP_H, COLORS, INTERACT_RADIUS,
+};

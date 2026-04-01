@@ -50,7 +50,7 @@ fi
 echo -e "  Python: ${G}$($PYTHON --version)${N}"
 
 # ── Install Python deps if needed ───────────────────────────────────
-if ! $PYTHON -c "import pygame" 2>/dev/null || ! $PYTHON -c "import socketio" 2>/dev/null; then
+if ! $PYTHON -c "import pygame" 2>/dev/null || ! $PYTHON -c "import socketio" 2>/dev/null || ! $PYTHON -c "import OpenGL" 2>/dev/null; then
     echo -e "  ${Y}Installing game dependencies (one-time)...${N}"
     $PYTHON -m pip install -r requirements.txt --quiet --break-system-packages 2>/dev/null \
         || $PYTHON -m pip install -r requirements.txt --quiet --user 2>/dev/null \
