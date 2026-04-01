@@ -10,7 +10,7 @@ import threading
 import socketio
 import pygame
 from OpenGL.GL import glClear, GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT
-from renderer3d import Renderer3D, blit_surface_to_screen, begin_2d_mode
+from renderer3d import Renderer3D, blit_surface_to_screen, begin_2d_mode, DATAHALL_MAP
 
 ADMIN_MODE = "--admin" in sys.argv or "-a" in sys.argv
 
@@ -23,7 +23,10 @@ for i, arg in enumerate(sys.argv):
 
 # ── Config ──────────────────────────────────────────────────────────
 WIDTH, HEIGHT = 1024, 768
-MAP_W, MAP_H = 1600, 1200
+# Map size comes from datahall layout or server; these are defaults
+_DH_SIZE = DATAHALL_MAP["map_size"] if DATAHALL_MAP else None
+MAP_W = int(_DH_SIZE["w"]) if _DH_SIZE else 1600
+MAP_H = int(_DH_SIZE["h"]) if _DH_SIZE else 1200
 FPS = 60
 PLAYER_RADIUS = 16
 FLASHLIGHT_RADIUS = 180

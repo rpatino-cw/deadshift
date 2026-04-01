@@ -1,4 +1,4 @@
-.PHONY: play host admin dev test
+.PHONY: play host admin dev test map
 
 play:
 	@bash play.sh
@@ -8,6 +8,9 @@ host:
 
 admin:
 	@bash play.sh admin
+
+map:
+	@python3 -c "from datahall_map import generate_evi01_map; import json; m = generate_evi01_map(); json.dump({'mapSize': m['map_size'], 'taskStations': [{'id': t['id'], 'type': t['type'], 'x': t['x'], 'y': t['z'], 'label': t['label']} for t in m['task_positions']], 'sabotageStations': [{'id': s['id'], 'type': s['type'], 'x': s['x'], 'y': s['z'], 'label': s['label']} for s in m['sabotage_positions']], 'meetingButton': {'x': m['meeting_button']['x'], 'y': m['meeting_button']['z'], 'radius': 40}, 'spawnCenter': {'x': m['spawn_center']['x'], 'y': m['spawn_center']['z']}}, open('map_data.json', 'w'), indent=2); print('Generated map_data.json from', m['layout_name'])"
 
 test:
 	@node --test test/*.test.js

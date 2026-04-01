@@ -11,13 +11,22 @@ import pygame
 from OpenGL.GL import *
 from OpenGL.GLU import *
 
+try:
+    from datahall_map import generate_evi01_map
+    DATAHALL_MAP = generate_evi01_map()
+except Exception:
+    DATAHALL_MAP = None
+
 # ── Constants ──────────────────────────────────────────────────────────
 CAM_ANGLE = 55       # degrees from horizontal
-CAM_DISTANCE = 500   # distance from player
+CAM_DISTANCE = 400   # closer for datahall scale
 CAM_FOV = 60         # field of view
 FLASHLIGHT_RADIUS = 180
-PLAYER_RADIUS = 16
+PLAYER_RADIUS = 10   # slightly smaller for datahall scale
 INTERACT_RADIUS = 80
+CHAR_HEIGHT = 30     # humanoid character height
+CHAR_BODY_R = 6      # body radius
+CHAR_HEAD_R = 5      # head radius
 
 # Colors (normalized 0-1)
 C_FLOOR = (0.04, 0.04, 0.06)
@@ -96,6 +105,28 @@ def _draw_sphere_geometry(slices=12, stacks=8):
         glEnd()
 
 
+def _draw_cylinder_geometry(slices=10, height=1.0, radius=1.0):
+    """Draw a cylinder from y=0 to y=height, radius 1, centered at origin XZ."""
+    # Side faces
+    glBegin(GL_QUAD_STRIP)
+    for i in range(slices + 1):
+        angle = 2 * math.pi * i / slices
+        x = radius * math.cos(angle)
+        z = radius * math.sin(angle)
+        glNormal3f(math.cos(angle), 0, math.sin(angle))
+        glVertex3f(x, height, z)
+        glVertex3f(x, 0, z)
+    glEnd()
+    # Top cap
+    glBegin(GL_TRIANGLE_FAN)
+    glNormal3f(0, 1, 0)
+    glVertex3f(0, height, 0)
+    for i in range(slices + 1):
+        angle = 2 * math.pi * i / slices
+        glVertex3f(radius * math.cos(angle), height, radius * math.sin(angle))
+    glEnd()
+
+
 def build_display_lists():
     """Compile unit primitives once. Returns dict of display list IDs."""
     lists = {}
@@ -119,6 +150,24 @@ def build_display_lists():
     glVertex3f(0.5, 0, 0.5)
     glVertex3f(-0.5, 0, 0.5)
     glEnd()
+    glEndList()
+
+    # Humanoid character: cylinder body + sphere head
+    lists["character"] = glGenLists(1)
+    glNewList(lists["character"], GL_COMPILE)
+    # Body (cylinder from y=0 to y=CHAR_HEIGHT-CHAR_HEAD_R*2)
+    _draw_cylinder_geometry(8, CHAR_HEIGHT - CHAR_HEAD_R * 2, CHAR_BODY_R)
+    # Head (sphere on top)
+    glPushMatrix()
+    glTranslatef(0, CHAR_HEIGHT - CHAR_HEAD_R, 0)
+    _draw_sphere_geometry(8, 6)
+    glPopMatrix()
+    glEndList()
+
+    # Server rack: tall thin box with front detail
+    lists["rack"] = glGenLists(1)
+    glNewList(lists["rack"], GL_COMPILE)
+    _draw_cube_geometry()
     glEndList()
 
     return lists
@@ -193,6 +242,7 @@ class Renderer3D:
         self.dl = build_display_lists()
         self.fog_tex = build_fog_texture(FLASHLIGHT_RADIUS, 40, width, height)
         self.hud_surf = pygame.Surface((width, height), pygame.SRCALPHA)
+        self.dh_map = DATAHALL_MAP
         self._init_gl()
 
     def _init_gl(self):
@@ -259,45 +309,82 @@ class Renderer3D:
         mw, mh = gs.map_size
         glDisable(GL_LIGHTING)
 
-        # Dark floor
-        glColor3f(*C_FLOOR)
+        # Dark concrete floor
+        glColor3f(0.06, 0.06, 0.08)
         glPushMatrix()
         glTranslatef(mw / 2, -0.1, mh / 2)
         glScalef(mw, 1, mh)
         glCallList(self.dl["quad"])
         glPopMatrix()
 
-        # Grid lines
-        glColor3f(*C_GRID)
+        # Subtle grid lines (tile pattern)
+        glColor3f(0.08, 0.08, 0.10)
         glBegin(GL_LINES)
-        for gx in range(0, int(mw) + 1, 100):
-            glVertex3f(gx, 0.1, 0)
-            glVertex3f(gx, 0.1, mh)
-        for gz in range(0, int(mh) + 1, 100):
-            glVertex3f(0, 0.1, gz)
-            glVertex3f(mw, 0.1, gz)
+        for gx in range(0, int(mw) + 1, 50):
+            glVertex3f(gx, 0.05, 0)
+            glVertex3f(gx, 0.05, mh)
+        for gz in range(0, int(mh) + 1, 50):
+            glVertex3f(0, 0.05, gz)
+            glVertex3f(mw, 0.05, gz)
         glEnd()
 
         glEnable(GL_LIGHTING)
 
+        # Draw server racks from datahall map
+        if self.dh_map:
+            self._draw_racks()
+
+    def _draw_racks(self):
+        """Draw all 320 server racks from the datahall layout."""
+        C_RACK = (0.12, 0.12, 0.15)
+        C_RACK_FRONT = (0.08, 0.08, 0.10)
+        C_RACK_LED = (0.0, 0.4, 0.1)
+
+        for rack in self.dh_map["racks"]:
+            glColor3f(*C_RACK)
+            glPushMatrix()
+            glTranslatef(rack["x"], rack["h"] / 2, rack["z"])
+            glScalef(rack["w"], rack["h"], rack["d"])
+            glCallList(self.dl["rack"])
+            glPopMatrix()
+
+            # Small green LED dot on front face (subtle life indicator)
+            glDisable(GL_LIGHTING)
+            glColor3f(*C_RACK_LED)
+            glPointSize(2)
+            glBegin(GL_POINTS)
+            glVertex3f(rack["x"], rack["h"] * 0.8, rack["z"] - rack["d"] / 2 - 0.5)
+            glEnd()
+            glEnable(GL_LIGHTING)
+
     def _draw_border(self, gs):
         mw, mh = gs.map_size
-        wall_h = 40
-        wall_t = 8
-        glColor3f(*C_BORDER)
 
-        walls = [
-            (mw / 2, wall_h / 2, -wall_t / 2, mw, wall_h, wall_t),        # north
-            (mw / 2, wall_h / 2, mh + wall_t / 2, mw, wall_h, wall_t),    # south
-            (-wall_t / 2, wall_h / 2, mh / 2, wall_t, wall_h, mh),        # west
-            (mw + wall_t / 2, wall_h / 2, mh / 2, wall_t, wall_h, mh),    # east
-        ]
-        for x, y, z, sx, sy, sz in walls:
-            glPushMatrix()
-            glTranslatef(x, y, z)
-            glScalef(sx, sy, sz)
-            glCallList(self.dl["cube"])
-            glPopMatrix()
+        if self.dh_map:
+            # Draw datahall walls
+            for wall in self.dh_map["walls"]:
+                glColor3f(*C_BORDER)
+                glPushMatrix()
+                glTranslatef(wall["x"], wall["y"], wall["z"])
+                glScalef(wall["sx"], wall["sy"], wall["sz"])
+                glCallList(self.dl["cube"])
+                glPopMatrix()
+        else:
+            wall_h = 40
+            wall_t = 8
+            glColor3f(*C_BORDER)
+            walls = [
+                (mw / 2, wall_h / 2, -wall_t / 2, mw, wall_h, wall_t),
+                (mw / 2, wall_h / 2, mh + wall_t / 2, mw, wall_h, wall_t),
+                (-wall_t / 2, wall_h / 2, mh / 2, wall_t, wall_h, mh),
+                (mw + wall_t / 2, wall_h / 2, mh / 2, wall_t, wall_h, mh),
+            ]
+            for x, y, z, sx, sy, sz in walls:
+                glPushMatrix()
+                glTranslatef(x, y, z)
+                glScalef(sx, sy, sz)
+                glCallList(self.dl["cube"])
+                glPopMatrix()
 
     def _draw_task_stations(self, gs):
         for station in gs.task_stations:
@@ -305,29 +392,55 @@ class Renderer3D:
                 t["stationId"] == station["id"] and not t.get("done")
                 for t in gs.my_tasks
             )
-            if has_task:
-                glColor3f(*C_YELLOW)
-            else:
-                glColor3f(*C_DARK_STATION)
+            if not has_task:
+                continue  # only show active task markers
 
+            # Floating yellow diamond above the rack
+            glColor3f(*C_YELLOW)
             glPushMatrix()
-            glTranslatef(station["x"], 30, station["y"])
-            glScalef(60, 60, 60)
+            glTranslatef(station["x"], 90, station["y"])
+            glRotatef(45, 0, 1, 0)
+            glScalef(12, 12, 12)
             glCallList(self.dl["cube"])
             glPopMatrix()
+
+            # Pulsing glow ring on floor
+            glDisable(GL_LIGHTING)
+            glColor3f(0.95, 0.75, 0.1)
+            glBegin(GL_LINE_LOOP)
+            for i in range(16):
+                angle = 2 * math.pi * i / 16
+                glVertex3f(station["x"] + 20 * math.cos(angle), 0.5,
+                           station["y"] + 20 * math.sin(angle))
+            glEnd()
+            glEnable(GL_LIGHTING)
 
     def _draw_sabotage_stations(self, gs):
         if gs.my_role != "impostor":
             return
         for station in gs.sabotage_stations:
             done = station["id"] in gs.active_sabotages
-            glColor3f(*(C_SAB_DONE if done else C_DARK_RED))
+            if done:
+                continue  # hide completed sabotages
 
+            # Red warning marker in the corridor
+            glColor3f(*C_RED)
             glPushMatrix()
-            glTranslatef(station["x"], 25, station["y"])
-            glScalef(50, 50, 50)
+            glTranslatef(station["x"], 15, station["y"])
+            glScalef(15, 30, 15)
             glCallList(self.dl["cube"])
             glPopMatrix()
+
+            # Red glow ring
+            glDisable(GL_LIGHTING)
+            glColor3f(0.9, 0.2, 0.1)
+            glBegin(GL_LINE_LOOP)
+            for i in range(16):
+                angle = 2 * math.pi * i / 16
+                glVertex3f(station["x"] + 18 * math.cos(angle), 0.5,
+                           station["y"] + 18 * math.sin(angle))
+            glEnd()
+            glEnable(GL_LIGHTING)
 
     def _draw_meeting_button(self, gs):
         if not gs.meeting_button:
@@ -354,9 +467,8 @@ class Renderer3D:
             color = hex_to_gl(p.get("color", "#ffffff"))
             glColor3f(*color)
             glPushMatrix()
-            glTranslatef(p["x"], PLAYER_RADIUS, p["y"])
-            glScalef(PLAYER_RADIUS, PLAYER_RADIUS, PLAYER_RADIUS)
-            glCallList(self.dl["sphere"])
+            glTranslatef(p["x"], 0, p["y"])
+            glCallList(self.dl["character"])
             glPopMatrix()
 
     def _draw_local_player(self, gs):
@@ -365,12 +477,11 @@ class Renderer3D:
         else:
             my_color = C_WHITE
 
-        # Main body
+        # Humanoid character
         glColor3f(*my_color)
         glPushMatrix()
-        glTranslatef(gs.my_x, PLAYER_RADIUS, gs.my_y)
-        glScalef(PLAYER_RADIUS, PLAYER_RADIUS, PLAYER_RADIUS)
-        glCallList(self.dl["sphere"])
+        glTranslatef(gs.my_x, 0, gs.my_y)
+        glCallList(self.dl["character"])
         glPopMatrix()
 
         # White ring at base for visibility
@@ -380,9 +491,9 @@ class Renderer3D:
         for i in range(24):
             angle = 2 * math.pi * i / 24
             glVertex3f(
-                gs.my_x + PLAYER_RADIUS * 1.2 * math.cos(angle),
-                1,
-                gs.my_y + PLAYER_RADIUS * 1.2 * math.sin(angle),
+                gs.my_x + CHAR_BODY_R * 1.5 * math.cos(angle),
+                0.5,
+                gs.my_y + CHAR_BODY_R * 1.5 * math.sin(angle),
             )
         glEnd()
         glEnable(GL_LIGHTING)

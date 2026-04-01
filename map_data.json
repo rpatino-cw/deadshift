@@ -1,0 +1,96 @@
+{
+  "mapSize": {
+    "w": 776,
+    "h": 1676
+  },
+  "taskStations": [
+    {
+      "id": "task_0",
+      "type": "cable",
+      "x": 43.0,
+      "y": 53.0,
+      "label": "R1 - CABLE"
+    },
+    {
+      "id": "task_1",
+      "type": "psu",
+      "x": 193.0,
+      "y": 303.0,
+      "label": "R35 - PSU"
+    },
+    {
+      "id": "task_2",
+      "type": "temp",
+      "x": 43.0,
+      "y": 663.0,
+      "label": "R80 - TEMP"
+    },
+    {
+      "id": "task_3",
+      "type": "badge",
+      "x": 193.0,
+      "y": 953.0,
+      "label": "R106 - BADGE"
+    },
+    {
+      "id": "task_4",
+      "type": "cable",
+      "x": 463.0,
+      "y": 53.0,
+      "label": "R141 - CABLE"
+    },
+    {
+      "id": "task_5",
+      "type": "psu",
+      "x": 613.0,
+      "y": 413.0,
+      "label": "R186 - PSU"
+    },
+    {
+      "id": "task_6",
+      "type": "temp",
+      "x": 463.0,
+      "y": 843.0,
+      "label": "R240 - TEMP"
+    },
+    {
+      "id": "task_7",
+      "type": "badge",
+      "x": 613.0,
+      "y": 1203.0,
+      "label": "R275 - BADGE"
+    }
+  ],
+  "sabotageStations": [
+    {
+      "id": "sab_1",
+      "type": "overheat",
+      "x": 348.0,
+      "y": 502.79999999999995,
+      "label": "Cooling Unit A"
+    },
+    {
+      "id": "sab_2",
+      "type": "cut_cable",
+      "x": 388.0,
+      "y": 838.0,
+      "label": "Fiber Trunk"
+    },
+    {
+      "id": "sab_3",
+      "type": "trip_power",
+      "x": 428.0,
+      "y": 1173.1999999999998,
+      "label": "Main Breaker"
+    }
+  ],
+  "meetingButton": {
+    "x": 388.0,
+    "y": 838.0,
+    "radius": 40
+  },
+  "spawnCenter": {
+    "x": 388.0,
+    "y": 1598
+  }
+}
