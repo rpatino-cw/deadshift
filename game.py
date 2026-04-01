@@ -22,14 +22,14 @@ for i, arg in enumerate(sys.argv):
         break
 
 # ── Config ──────────────────────────────────────────────────────────
-WIDTH, HEIGHT = 1024, 768
+WIDTH, HEIGHT = 1920, 1080
 # Map size comes from datahall layout or server; these are defaults
 _DH_SIZE = DATAHALL_MAP["map_size"] if DATAHALL_MAP else None
 MAP_W = int(_DH_SIZE["w"]) if _DH_SIZE else 1600
 MAP_H = int(_DH_SIZE["h"]) if _DH_SIZE else 1200
 FPS = 60
 PLAYER_RADIUS = 16
-FLASHLIGHT_RADIUS = 180
+FLASHLIGHT_RADIUS = 400
 INTERACT_RADIUS = 80
 MOVE_SPEED = 4
 FONT_SIZE = 18
@@ -703,12 +703,12 @@ def draw_game(screen, font):
     # Flashlight effect — darken everything outside radius
     if am_alive and not gs.no_fog:
         fog = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        fog.fill((0, 0, 0, 180))
+        fog.fill((0, 0, 0, 120))
         # Cut out a circle around player
         pygame.draw.circle(fog, (0, 0, 0, 0), (mx, my), FLASHLIGHT_RADIUS)
         # Gradient edge
-        for r in range(FLASHLIGHT_RADIUS, FLASHLIGHT_RADIUS + 40):
-            alpha = int(180 * (r - FLASHLIGHT_RADIUS) / 40)
+        for r in range(FLASHLIGHT_RADIUS, FLASHLIGHT_RADIUS + 60):
+            alpha = int(120 * (r - FLASHLIGHT_RADIUS) / 60)
             pygame.draw.circle(fog, (0, 0, 0, alpha), (mx, my), r, 1)
         screen.blit(fog, (0, 0))
 
@@ -1151,7 +1151,7 @@ def get_discovered_rooms():
 # ── Main Loop ───────────────────────────────────────────────────────
 def main():
     pygame.init()
-    screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.OPENGL | pygame.DOUBLEBUF)
+    screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.OPENGL | pygame.DOUBLEBUF | pygame.FULLSCREEN)
     pygame.display.set_caption("DEADSHIFT")
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("monospace", FONT_SIZE)

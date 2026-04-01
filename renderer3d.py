@@ -21,7 +21,7 @@ except Exception:
 CAM_ANGLE = 55       # degrees from horizontal
 CAM_DISTANCE = 400   # closer for datahall scale
 CAM_FOV = 60         # field of view
-FLASHLIGHT_RADIUS = 180
+FLASHLIGHT_RADIUS = 400  # large radius for better visibility
 PLAYER_RADIUS = 10   # slightly smaller for datahall scale
 INTERACT_RADIUS = 80
 CHAR_HEIGHT = 30     # humanoid character height
@@ -177,11 +177,11 @@ def build_display_lists():
 def build_fog_texture(radius, edge_width, width, height):
     """Build a screen-sized RGBA texture with a transparent circle in the center."""
     fog_surf = pygame.Surface((width, height), pygame.SRCALPHA)
-    fog_surf.fill((0, 0, 0, 180))
+    fog_surf.fill((0, 0, 0, 120))  # lighter fog for more visibility
     cx, cy = width // 2, height // 2
     pygame.draw.circle(fog_surf, (0, 0, 0, 0), (cx, cy), radius)
     for r in range(radius, radius + edge_width):
-        alpha = int(180 * (r - radius) / edge_width)
+        alpha = int(120 * (r - radius) / edge_width)
         pygame.draw.circle(fog_surf, (0, 0, 0, alpha), (cx, cy), r, 1)
     return _upload_surface(fog_surf)
 
@@ -249,9 +249,9 @@ class Renderer3D:
         glEnable(GL_DEPTH_TEST)
         glEnable(GL_LIGHTING)
         glEnable(GL_LIGHT0)
-        glLightfv(GL_LIGHT0, GL_POSITION, [400, 800, 300, 1])
-        glLightfv(GL_LIGHT0, GL_AMBIENT, [0.2, 0.2, 0.25, 1])
-        glLightfv(GL_LIGHT0, GL_DIFFUSE, [0.6, 0.6, 0.65, 1])
+        glLightfv(GL_LIGHT0, GL_POSITION, [400, 1000, 600, 1])
+        glLightfv(GL_LIGHT0, GL_AMBIENT, [0.4, 0.4, 0.45, 1])
+        glLightfv(GL_LIGHT0, GL_DIFFUSE, [0.8, 0.8, 0.85, 1])
         glEnable(GL_COLOR_MATERIAL)
         glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE)
         glClearColor(0, 0, 0, 1)
@@ -309,16 +309,16 @@ class Renderer3D:
         mw, mh = gs.map_size
         glDisable(GL_LIGHTING)
 
-        # Dark concrete floor
-        glColor3f(0.06, 0.06, 0.08)
+        # Concrete floor
+        glColor3f(0.12, 0.12, 0.15)
         glPushMatrix()
         glTranslatef(mw / 2, -0.1, mh / 2)
         glScalef(mw, 1, mh)
         glCallList(self.dl["quad"])
         glPopMatrix()
 
-        # Subtle grid lines (tile pattern)
-        glColor3f(0.08, 0.08, 0.10)
+        # Tile pattern lines
+        glColor3f(0.15, 0.15, 0.18)
         glBegin(GL_LINES)
         for gx in range(0, int(mw) + 1, 50):
             glVertex3f(gx, 0.05, 0)
@@ -336,7 +336,7 @@ class Renderer3D:
 
     def _draw_racks(self):
         """Draw all 320 server racks from the datahall layout."""
-        C_RACK = (0.12, 0.12, 0.15)
+        C_RACK = (0.2, 0.2, 0.25)
         C_RACK_FRONT = (0.08, 0.08, 0.10)
         C_RACK_LED = (0.0, 0.4, 0.1)
 
