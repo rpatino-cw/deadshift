@@ -5,6 +5,7 @@ import sys
 import math
 import time
 import json
+import signal
 import socket
 import threading
 import socketio
@@ -459,6 +460,15 @@ def connect_and_join(server, name, code):
 def browse_join(ip, port, code, name):
     """Join a discovered room directly."""
     connect_and_join(f"{ip}:{port}", name, code)
+
+
+def safe_call(event, data=None, timeout=3):
+    """Call server with timeout. Returns response or None on failure."""
+    try:
+        return sio.call(event, data or {}, timeout=timeout)
+    except Exception:
+        gs.notify("Server not responding", 2)
+        return None
 
 
 # ── Drawing ─────────────────────────────────────────────────────────
@@ -943,7 +953,7 @@ def handle_admin_keys(ev):
         return True
     if ev.key == pygame.K_F2:
         new_role = "crew" if gs.my_role == "impostor" else "impostor"
-        resp = sio.call("admin:role", {"role": new_role})
+        resp = safe_call("admin:role", {"role": new_role})
         if resp and resp.get("ok"):
             gs.my_role = resp["role"]
             gs.notify(f"Role → {gs.my_role.upper()}", 2)
@@ -953,33 +963,33 @@ def handle_admin_keys(ev):
         gs.notify(f"Fog {'OFF' if gs.no_fog else 'ON'}", 2)
         return True
     if ev.key == pygame.K_F4:
-        resp = sio.call("admin:god", {})
+        resp = safe_call("admin:god")
         if resp and resp.get("ok"):
             gs.god_mode = resp["godMode"]
             gs.notify(f"God mode {'ON' if gs.god_mode else 'OFF'}", 2)
         return True
     if ev.key == pygame.K_F5:
-        resp = sio.call("admin:bots", {"count": 3})
+        resp = safe_call("admin:bots", {"count": 3})
         if resp and resp.get("ok"):
             gs.room = resp["room"]
             gs.notify("Spawned 3 bots", 2)
         return True
     if ev.key == pygame.K_F6:
-        sio.call("admin:meeting", {})
+        safe_call("admin:meeting")
         return True
     if ev.key == pygame.K_F7:
-        sio.call("admin:skip_tasks", {})
+        safe_call("admin:skip_tasks")
         gs.notify("Tasks skipped!", 2)
         return True
     if ev.key == pygame.K_F8:
-        sio.call("admin:win", {"side": "crew"})
+        safe_call("admin:win", {"side": "crew"})
         return True
     if ev.key == pygame.K_F9:
-        sio.call("admin:win", {"side": "impostor"})
+        safe_call("admin:win", {"side": "impostor"})
         return True
     if ev.key == pygame.K_F10:
         gs.my_x, gs.my_y = MAP_W / 2, MAP_H / 2
-        sio.call("admin:tp", {"x": gs.my_x, "y": gs.my_y})
+        safe_call("admin:tp", {"x": gs.my_x, "y": gs.my_y})
         gs.notify("TP → center", 1)
         return True
 
@@ -1162,6 +1172,9 @@ def main():
     overlay2d = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
     renderer = Renderer3D(WIDTH, HEIGHT)
 
+    # Ctrl+C exits cleanly even in fullscreen
+    signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
+
     # Start LAN discovery
     threading.Thread(target=udp_listener, daemon=True).start()
 
@@ -1177,6 +1190,8 @@ def main():
 
         for ev in events:
             if ev.type == pygame.QUIT:
+                running = False
+            if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
                 running = False
             # Admin keys consume event if handled
             if ADMIN_MODE:
@@ -1265,7 +1280,7 @@ def main():
             for ev in events:
                 if ev.type == pygame.KEYDOWN:
                     if ev.key == pygame.K_RETURN and gs.room and gs.room.get("host") == gs.my_id:
-                        resp = sio.call("start", {}, timeout=5)
+                        resp = safe_call("start", timeout=5)
                         if not resp:
                             gs.notify("Server not responding", 3)
                         elif not resp.get("ok"):
@@ -1273,10 +1288,7 @@ def main():
                             gs.notify(msg, 4)
                             gs.error_msg = msg
                     elif ev.key == pygame.K_r:
-                        sio.call("ready", {})
-                    elif ev.key == pygame.K_ESCAPE:
-                        sio.emit("leave")
-                        gs.phase = "menu"
+                        safe_call("ready")
             draw_lobby(surf2d, font, big_font)
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
             blit_surface_to_screen(surf2d, WIDTH, HEIGHT)
@@ -1289,7 +1301,7 @@ def main():
             if gs.active_task:
                 completed = gs.active_task.update(events, mouse_pos, mouse_held)
                 if completed:
-                    sio.call("task:complete", {"stationId": gs.active_task.station_id})
+                    safe_call("task:complete", {"stationId": gs.active_task.station_id})
                     gs.notify("Task complete!", 2)
                     gs.active_task = None
                 for ev in events:
@@ -1339,22 +1351,19 @@ def main():
                                     if task:
                                         gs.active_task = MiniGame(task["type"], station["id"])
                                 elif nearby["type"] == "sabotage":
-                                    sio.call("sabotage", {"stationId": nearby["station"]["id"]})
+                                    safe_call("sabotage", {"stationId": nearby["station"]["id"]})
                                     gs.notify("SABOTAGED!", 2)
                                 elif nearby["type"] == "meeting":
-                                    sio.call("meeting:call", {})
+                                    safe_call("meeting:call")
                         elif ev.key == pygame.K_SPACE and am_alive:
-                            sio.call("meeting:call", {})
+                            safe_call("meeting:call")
                         elif ev.key == pygame.K_q and gs.my_role == "impostor" and am_alive and gs.kill_cooldown <= 0:
                             target = get_nearby_kill_target()
                             if target:
-                                resp = sio.call("kill", {"targetId": target["id"]})
+                                resp = safe_call("kill", {"targetId": target["id"]})
                                 if resp and resp.get("ok"):
                                     gs.kill_cooldown = 25  # 25 sec cooldown
                                     gs.notify(f"Eliminated {target['name']}!", 2)
-                        elif ev.key == pygame.K_ESCAPE:
-                            sio.emit("leave")
-                            gs.phase = "menu"
 
                 renderer.draw_game(gs, font, get_nearby_interactable, get_nearby_kill_target, draw_minimap)
 
@@ -1379,12 +1388,12 @@ def main():
             for ev in events:
                 if ev.type == pygame.KEYDOWN and not gs.vote_cast:
                     if ev.key == pygame.K_0:
-                        sio.call("vote", {"targetId": "skip"})
+                        safe_call("vote", {"targetId": "skip"})
                         gs.vote_cast = True
                     elif ev.unicode and ev.unicode.isdigit():
                         idx = int(ev.unicode) - 1
                         if 0 <= idx < len(gs.vote_players):
-                            sio.call("vote", {"targetId": gs.vote_players[idx]["id"]})
+                            safe_call("vote", {"targetId": gs.vote_players[idx]["id"]})
                             gs.vote_cast = True
             draw_voting(surf2d, font, big_font)
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -1395,7 +1404,7 @@ def main():
             for ev in events:
                 if ev.type == pygame.KEYDOWN and ev.key == pygame.K_RETURN:
                     if sio.connected:
-                        sio.call("restart", {})
+                        safe_call("restart")
                     else:
                         gs.phase = "menu"
             draw_gameover(surf2d, font, big_font)
@@ -1410,9 +1419,13 @@ def main():
         pygame.display.flip()
 
     pygame.quit()
-    if sio.connected:
-        sio.disconnect()
-    sys.exit()
+    try:
+        if sio.connected:
+            sio.emit("leave")
+            sio.disconnect()
+    except Exception:
+        pass
+    sys.exit(0)
 
 
 if __name__ == "__main__":
