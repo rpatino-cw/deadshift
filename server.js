@@ -1,0 +1,705 @@
+const http = require("http");
+const { Server } = require("socket.io");
+const os = require("os");
+
+const PORT = process.env.PORT || 3000;
+const server = http.createServer();
+const io = new Server(server, { cors: { origin: "*" } });
+
+// ── Constants ──────────────────────────────────────────────────────
+const COLORS = [
+  "#e74c3c", "#3498db", "#2ecc71", "#f39c12",
+  "#9b59b6", "#1abc9c", "#e67e22", "#ecf0f1",
+];
+
+const TASK_TYPES = ["cable", "psu", "temp", "badge"];
+const SABOTAGE_TYPES = ["overheat", "cut_cable", "trip_power"];
+
+const MAP_W = 1600;
+const MAP_H = 1200;
+
+// Task station locations on the map
+const TASK_STATIONS = [
+  { id: "cable_1", type: "cable", x: 200, y: 200, label: "Rack A - Cables" },
+  { id: "cable_2", type: "cable", x: 1400, y: 200, label: "Rack F - Cables" },
+  { id: "psu_1", type: "psu", x: 200, y: 600, label: "Rack B - PSU Bay" },
+  { id: "psu_2", type: "psu", x: 1400, y: 600, label: "Rack E - PSU Bay" },
+  { id: "temp_1", type: "temp", x: 800, y: 200, label: "Cooling Unit 1" },
+  { id: "temp_2", type: "temp", x: 800, y: 1000, label: "Cooling Unit 2" },
+  { id: "badge_1", type: "badge", x: 200, y: 1000, label: "Security Panel A" },
+  { id: "badge_2", type: "badge", x: 1400, y: 1000, label: "Security Panel B" },
+];
+
+// Sabotage targets (separate from task stations)
+const SABOTAGE_STATIONS = [
+  { id: "sab_1", type: "overheat", x: 500, y: 400, label: "Server Block 1" },
+  { id: "sab_2", type: "cut_cable", x: 1100, y: 400, label: "Fiber Trunk" },
+  { id: "sab_3", type: "trip_power", x: 800, y: 600, label: "Main Breaker" },
+];
+
+const MEETING_BUTTON = { x: 800, y: 600, radius: 40 };
+const MEETING_DURATION = 45000; // 45 sec discussion + vote
+const VOTE_DURATION = 15000;
+const INTERACT_RADIUS = 80;
+const PLAYER_SPEED = 4;
+const TICK_RATE = 20; // server ticks per second
+
+// ── State ──────────────────────────────────────────────────────────
+const rooms = new Map();
+
+function makeCode() {
+  return Math.random().toString(36).substring(2, 6).toUpperCase();
+}
+
+function getLocalIP() {
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      if (net.family === "IPv4" && !net.internal) return net.address;
+    }
+  }
+  return "localhost";
+}
+
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function assignTasks(playerCount) {
+  // Each crew member gets 3-4 tasks from the stations
+  const tasksPerPlayer = playerCount <= 4 ? 4 : 3;
+  return tasksPerPlayer;
+}
+
+function roomSnapshot(room) {
+  const players = [...room.players.values()].map((p) => ({
+    id: p.id,
+    name: p.name,
+    color: p.color,
+    ready: p.ready,
+    alive: p.alive,
+    x: p.x,
+    y: p.y,
+  }));
+  return {
+    code: room.code,
+    host: room.host,
+    maxPlayers: room.maxPlayers,
+    phase: room.phase, // "lobby" | "playing" | "meeting" | "voting" | "gameover"
+    players,
+  };
+}
+
+function fullStateFor(room, playerId) {
+  const player = room.players.get(playerId);
+  if (!player) return null;
+
+  const base = roomSnapshot(room);
+  base.myRole = player.role;
+  base.myTasks = player.tasks;
+  base.taskStations = TASK_STATIONS;
+  base.sabotageStations = player.role === "impostor" ? SABOTAGE_STATIONS : [];
+  base.meetingButton = MEETING_BUTTON;
+  base.mapSize = { w: MAP_W, h: MAP_H };
+  base.completedTasks = room.completedTasks;
+  base.totalCrewTasks = room.totalCrewTasks;
+  base.sabotagesDone = room.sabotagesDone;
+  base.sabotagesNeeded = SABOTAGE_STATIONS.length;
+  base.activeSabotages = [...room.activeSabotages];
+  base.deadPlayers = [...room.players.values()]
+    .filter((p) => !p.alive)
+    .map((p) => p.id);
+  base.winner = room.winner;
+  return base;
+}
+
+function checkWinCondition(room) {
+  const alive = [...room.players.values()].filter((p) => p.alive);
+  const aliveImpostors = alive.filter((p) => p.role === "impostor");
+  const aliveCrew = alive.filter((p) => p.role === "crew");
+
+  // Impostor wins: equal or more impostors than crew alive
+  if (aliveImpostors.length >= aliveCrew.length && aliveImpostors.length > 0) {
+    room.winner = "impostor";
+    room.phase = "gameover";
+    return true;
+  }
+
+  // Impostor wins: all sabotages done
+  if (room.sabotagesDone >= SABOTAGE_STATIONS.length) {
+    room.winner = "impostor";
+    room.phase = "gameover";
+    return true;
+  }
+
+  // Crew wins: all impostors dead
+  if (aliveImpostors.length === 0) {
+    room.winner = "crew";
+    room.phase = "gameover";
+    return true;
+  }
+
+  // Crew wins: all tasks done
+  if (room.completedTasks >= room.totalCrewTasks) {
+    room.winner = "crew";
+    room.phase = "gameover";
+    return true;
+  }
+
+  return false;
+}
+
+// ── Socket handlers ────────────────────────────────────────────────
+io.on("connection", (socket) => {
+  console.log(`+ ${socket.id}`);
+  let currentRoom = null;
+
+  socket.on("create", ({ name, maxPlayers = 8 } = {}, ack) => {
+    if (currentRoom) return ack?.({ error: "Already in a room" });
+    const code = makeCode();
+    const player = {
+      id: socket.id, name: name || "Host", color: COLORS[0],
+      ready: false, alive: true, role: null, tasks: [],
+      x: MAP_W / 2, y: MAP_H / 2,
+    };
+    const room = {
+      code, host: socket.id, maxPlayers,
+      phase: "lobby",
+      players: new Map([[socket.id, player]]),
+      completedTasks: 0, totalCrewTasks: 0,
+      sabotagesDone: 0, activeSabotages: new Set(),
+      votes: new Map(), meetingCaller: null, meetingTimer: null,
+      chatLog: [], winner: null, tickInterval: null,
+    };
+    rooms.set(code, room);
+    socket.join(code);
+    currentRoom = code;
+    console.log(`  room ${code} by ${player.name}`);
+    ack?.({ ok: true, room: roomSnapshot(room) });
+  });
+
+  socket.on("join", ({ code, name } = {}, ack) => {
+    if (currentRoom) return ack?.({ error: "Already in a room" });
+    const room = rooms.get(code?.toUpperCase());
+    if (!room) return ack?.({ error: "Room not found" });
+    if (room.phase !== "lobby") return ack?.({ error: "Game already started" });
+    if (room.players.size >= room.maxPlayers) return ack?.({ error: "Room full" });
+
+    const colorIdx = room.players.size % COLORS.length;
+    const player = {
+      id: socket.id, name: name || `Player${room.players.size + 1}`,
+      color: COLORS[colorIdx], ready: false, alive: true, role: null, tasks: [],
+      x: MAP_W / 2 + (Math.random() - 0.5) * 200,
+      y: MAP_H / 2 + (Math.random() - 0.5) * 200,
+    };
+    room.players.set(socket.id, player);
+    socket.join(code);
+    currentRoom = code;
+    console.log(`  ${player.name} → ${code}`);
+    ack?.({ ok: true, room: roomSnapshot(room) });
+    socket.to(code).emit("player:joined", { room: roomSnapshot(room) });
+  });
+
+  socket.on("list", (_, ack) => {
+    const list = [...rooms.values()]
+      .filter((r) => r.phase === "lobby" && r.players.size < r.maxPlayers)
+      .map(roomSnapshot);
+    ack?.({ rooms: list });
+  });
+
+  socket.on("ready", (_, ack) => {
+    if (!currentRoom) return ack?.({ error: "Not in a room" });
+    const room = rooms.get(currentRoom);
+    const player = room.players.get(socket.id);
+    player.ready = !player.ready;
+    io.to(currentRoom).emit("player:updated", { room: roomSnapshot(room) });
+    ack?.({ ok: true, ready: player.ready });
+  });
+
+  // ── START GAME ─────────────────────────────────────────────────
+  socket.on("start", (_, ack) => {
+    if (!currentRoom) return ack?.({ error: "Not in a room" });
+    const room = rooms.get(currentRoom);
+    if (room.host !== socket.id) return ack?.({ error: "Only host can start" });
+
+    // Admin mode: skip player count + ready checks
+    if (!room.admin) {
+      if (room.players.size < 3) return ack?.({ error: "Need at least 3 players" });
+      const allReady = [...room.players.values()].every(
+        (p) => p.id === room.host || p.ready
+      );
+      if (!allReady) return ack?.({ error: "Not all players ready" });
+    }
+
+    // Assign roles — 1 impostor
+    const ids = shuffle([...room.players.keys()]);
+    const impostorCount = room.players.size >= 7 ? 2 : 1;
+    ids.forEach((id, i) => {
+      const p = room.players.get(id);
+      p.role = i < impostorCount ? "impostor" : "crew";
+      p.alive = true;
+      // Spawn positions — spread around map
+      const angle = (i / ids.length) * Math.PI * 2;
+      p.x = MAP_W / 2 + Math.cos(angle) * 300;
+      p.y = MAP_H / 2 + Math.sin(angle) * 300;
+    });
+
+    // Assign tasks to crew
+    const stations = shuffle([...TASK_STATIONS]);
+    const crewPlayers = [...room.players.values()].filter((p) => p.role === "crew");
+    const tasksPerPlayer = assignTasks(room.players.size);
+    let stationIdx = 0;
+    crewPlayers.forEach((p) => {
+      p.tasks = [];
+      for (let t = 0; t < tasksPerPlayer; t++) {
+        const station = stations[stationIdx % stations.length];
+        p.tasks.push({ stationId: station.id, type: station.type, done: false });
+        stationIdx++;
+      }
+    });
+
+    room.totalCrewTasks = crewPlayers.reduce((sum, p) => sum + p.tasks.length, 0);
+    room.completedTasks = 0;
+    room.sabotagesDone = 0;
+    room.activeSabotages = new Set();
+    room.phase = "playing";
+    room.winner = null;
+
+    // Send each player their own state
+    for (const [id] of room.players) {
+      io.to(id).emit("game:start", fullStateFor(room, id));
+    }
+
+    // Start tick loop
+    room.tickInterval = setInterval(() => broadcastPositions(room), 1000 / TICK_RATE);
+
+    console.log(`  GAME START in ${currentRoom} (${room.players.size} players)`);
+    ack?.({ ok: true });
+  });
+
+  // ── MOVEMENT ───────────────────────────────────────────────────
+  socket.on("move", ({ x, y }) => {
+    if (!currentRoom) return;
+    const room = rooms.get(currentRoom);
+    if (room.phase !== "playing") return;
+    const player = room.players.get(socket.id);
+    if (!player || !player.alive) return;
+
+    // Clamp to map bounds
+    player.x = Math.max(20, Math.min(MAP_W - 20, x));
+    player.y = Math.max(20, Math.min(MAP_H - 20, y));
+  });
+
+  // ── COMPLETE TASK (crew) ───────────────────────────────────────
+  socket.on("task:complete", ({ stationId } = {}, ack) => {
+    if (!currentRoom) return ack?.({ error: "Not in a room" });
+    const room = rooms.get(currentRoom);
+    if (room.phase !== "playing") return ack?.({ error: "Not playing" });
+    const player = room.players.get(socket.id);
+    if (!player || !player.alive || player.role !== "crew")
+      return ack?.({ error: "Can't do that" });
+
+    // Check proximity to station
+    const station = TASK_STATIONS.find((s) => s.id === stationId);
+    if (!station) return ack?.({ error: "Invalid station" });
+    const dist = Math.hypot(player.x - station.x, player.y - station.y);
+    if (dist > INTERACT_RADIUS) return ack?.({ error: "Too far" });
+
+    // Mark task done
+    const task = player.tasks.find((t) => t.stationId === stationId && !t.done);
+    if (!task) return ack?.({ error: "No pending task here" });
+    task.done = true;
+    room.completedTasks++;
+
+    console.log(`  ${player.name} completed ${stationId} (${room.completedTasks}/${room.totalCrewTasks})`);
+    ack?.({ ok: true, tasks: player.tasks });
+
+    if (checkWinCondition(room)) {
+      endGame(room);
+    }
+  });
+
+  // ── SABOTAGE (impostor) ────────────────────────────────────────
+  socket.on("sabotage", ({ stationId } = {}, ack) => {
+    if (!currentRoom) return ack?.({ error: "Not in a room" });
+    const room = rooms.get(currentRoom);
+    if (room.phase !== "playing") return ack?.({ error: "Not playing" });
+    const player = room.players.get(socket.id);
+    if (!player || !player.alive || player.role !== "impostor")
+      return ack?.({ error: "Can't do that" });
+
+    const station = SABOTAGE_STATIONS.find((s) => s.id === stationId);
+    if (!station) return ack?.({ error: "Invalid station" });
+    if (room.activeSabotages.has(stationId))
+      return ack?.({ error: "Already sabotaged" });
+
+    const dist = Math.hypot(player.x - station.x, player.y - station.y);
+    if (dist > INTERACT_RADIUS) return ack?.({ error: "Too far" });
+
+    room.activeSabotages.add(stationId);
+    room.sabotagesDone++;
+    console.log(`  ${player.name} SABOTAGED ${stationId} (${room.sabotagesDone}/3)`);
+
+    // Broadcast sabotage effect to all
+    const effect = station.type === "trip_power" ? "blackout" :
+                   station.type === "overheat" ? "alarm" : "sparks";
+    io.to(currentRoom).emit("sabotage:effect", {
+      type: effect, stationId, x: station.x, y: station.y,
+    });
+
+    ack?.({ ok: true });
+
+    if (checkWinCondition(room)) {
+      endGame(room);
+    }
+  });
+
+  // ── KILL (impostor) ────────────────────────────────────────────
+  socket.on("kill", ({ targetId } = {}, ack) => {
+    if (!currentRoom) return ack?.({ error: "Not in a room" });
+    const room = rooms.get(currentRoom);
+    if (room.phase !== "playing") return ack?.({ error: "Not playing" });
+    const player = room.players.get(socket.id);
+    if (!player || !player.alive || player.role !== "impostor")
+      return ack?.({ error: "Can't do that" });
+
+    const target = room.players.get(targetId);
+    if (!target || !target.alive || target.role === "impostor")
+      return ack?.({ error: "Invalid target" });
+
+    if (!room.godMode) {
+      const dist = Math.hypot(player.x - target.x, player.y - target.y);
+      if (dist > INTERACT_RADIUS) return ack?.({ error: "Too far" });
+    }
+
+    target.alive = false;
+    console.log(`  ${player.name} KILLED ${target.name}`);
+
+    // Notify the killed player
+    io.to(targetId).emit("killed", { by: socket.id });
+
+    // Broadcast body location
+    io.to(currentRoom).emit("body:found", {
+      x: target.x, y: target.y, name: target.name, color: target.color,
+    });
+
+    ack?.({ ok: true });
+
+    if (checkWinCondition(room)) {
+      endGame(room);
+    }
+  });
+
+  // ── REPORT BODY / CALL MEETING ─────────────────────────────────
+  socket.on("meeting:call", (_, ack) => {
+    if (!currentRoom) return ack?.({ error: "Not in a room" });
+    const room = rooms.get(currentRoom);
+    if (room.phase !== "playing") return ack?.({ error: "Not playing" });
+    const player = room.players.get(socket.id);
+    if (!player || !player.alive) return ack?.({ error: "Dead players can't call meetings" });
+
+    startMeeting(room, player);
+    ack?.({ ok: true });
+  });
+
+  // ── CHAT (during meeting) ──────────────────────────────────────
+  socket.on("chat", ({ message } = {}) => {
+    if (!currentRoom) return;
+    const room = rooms.get(currentRoom);
+    if (room.phase !== "meeting") return;
+    const player = room.players.get(socket.id);
+    if (!player || !player.alive) return;
+
+    const entry = { name: player.name, color: player.color, message: message?.slice(0, 200) };
+    room.chatLog.push(entry);
+    io.to(currentRoom).emit("chat:message", entry);
+  });
+
+  // ── VOTE ───────────────────────────────────────────────────────
+  socket.on("vote", ({ targetId } = {}, ack) => {
+    if (!currentRoom) return ack?.({ error: "Not in a room" });
+    const room = rooms.get(currentRoom);
+    if (room.phase !== "voting") return ack?.({ error: "Not voting phase" });
+    const player = room.players.get(socket.id);
+    if (!player || !player.alive) return ack?.({ error: "Dead can't vote" });
+    if (room.votes.has(socket.id)) return ack?.({ error: "Already voted" });
+
+    // targetId = "skip" or a player ID
+    room.votes.set(socket.id, targetId);
+    io.to(currentRoom).emit("vote:cast", { voter: socket.id, total: room.votes.size });
+    ack?.({ ok: true });
+
+    // Check if all alive players voted
+    const aliveCount = [...room.players.values()].filter((p) => p.alive).length;
+    if (room.votes.size >= aliveCount) {
+      resolveVotes(room);
+    }
+  });
+
+  // ── ADMIN / QA MODE ─────────────────────────────────────────────
+  socket.on("admin:enable", (_, ack) => {
+    if (!currentRoom) return ack?.({ error: "Not in a room" });
+    const room = rooms.get(currentRoom);
+    if (room.host !== socket.id) return ack?.({ error: "Only host" });
+    room.admin = true;
+    console.log(`  ADMIN MODE enabled in ${currentRoom}`);
+    ack?.({ ok: true });
+  });
+
+  // Spawn dummy bots (so you can start solo)
+  socket.on("admin:bots", ({ count = 3 } = {}, ack) => {
+    if (!currentRoom) return ack?.({ error: "Not in a room" });
+    const room = rooms.get(currentRoom);
+    if (!room.admin) return ack?.({ error: "Admin not enabled" });
+    const botNames = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"];
+    for (let i = 0; i < count; i++) {
+      const botId = `bot_${Date.now()}_${i}`;
+      const colorIdx = room.players.size % COLORS.length;
+      room.players.set(botId, {
+        id: botId, name: botNames[i % botNames.length],
+        color: COLORS[colorIdx], ready: true, alive: true,
+        role: null, tasks: [], x: MAP_W / 2 + (Math.random() - 0.5) * 400,
+        y: MAP_H / 2 + (Math.random() - 0.5) * 400,
+      });
+    }
+    io.to(currentRoom).emit("player:updated", { room: roomSnapshot(room) });
+    console.log(`  Spawned ${count} bots in ${currentRoom}`);
+    ack?.({ ok: true, room: roomSnapshot(room) });
+  });
+
+  // Switch your role mid-game
+  socket.on("admin:role", ({ role } = {}, ack) => {
+    if (!currentRoom) return ack?.({ error: "Not in a room" });
+    const room = rooms.get(currentRoom);
+    if (!room.admin) return ack?.({ error: "Admin not enabled" });
+    const player = room.players.get(socket.id);
+    if (!player) return ack?.({ error: "Not found" });
+    player.role = role === "impostor" ? "impostor" : "crew";
+    // Refresh sabotage stations visibility
+    io.to(socket.id).emit("game:resume", fullStateFor(room, socket.id));
+    console.log(`  Admin: ${player.name} → ${player.role}`);
+    ack?.({ ok: true, role: player.role });
+  });
+
+  // Force start a meeting
+  socket.on("admin:meeting", (_, ack) => {
+    if (!currentRoom) return ack?.({ error: "Not in a room" });
+    const room = rooms.get(currentRoom);
+    if (!room.admin) return ack?.({ error: "Admin not enabled" });
+    if (room.phase !== "playing") return ack?.({ error: "Not playing" });
+    const player = room.players.get(socket.id);
+    startMeeting(room, player);
+    ack?.({ ok: true });
+  });
+
+  // Teleport to any position
+  socket.on("admin:tp", ({ x, y } = {}, ack) => {
+    if (!currentRoom) return ack?.({ error: "Not in a room" });
+    const room = rooms.get(currentRoom);
+    if (!room.admin) return ack?.({ error: "Admin not enabled" });
+    const player = room.players.get(socket.id);
+    player.x = x ?? player.x;
+    player.y = y ?? player.y;
+    ack?.({ ok: true });
+  });
+
+  // Skip all tasks (instant crew win test)
+  socket.on("admin:skip_tasks", (_, ack) => {
+    if (!currentRoom) return ack?.({ error: "Not in a room" });
+    const room = rooms.get(currentRoom);
+    if (!room.admin) return ack?.({ error: "Admin not enabled" });
+    room.completedTasks = room.totalCrewTasks;
+    for (const [, p] of room.players) {
+      p.tasks.forEach((t) => (t.done = true));
+    }
+    if (checkWinCondition(room)) endGame(room);
+    ack?.({ ok: true });
+  });
+
+  // Force game over
+  socket.on("admin:win", ({ side } = {}, ack) => {
+    if (!currentRoom) return ack?.({ error: "Not in a room" });
+    const room = rooms.get(currentRoom);
+    if (!room.admin) return ack?.({ error: "Admin not enabled" });
+    room.winner = side === "impostor" ? "impostor" : "crew";
+    endGame(room);
+    ack?.({ ok: true });
+  });
+
+  // Toggle god mode (no kill proximity check, no cooldown)
+  socket.on("admin:god", (_, ack) => {
+    if (!currentRoom) return ack?.({ error: "Not in a room" });
+    const room = rooms.get(currentRoom);
+    if (!room.admin) return ack?.({ error: "Admin not enabled" });
+    room.godMode = !room.godMode;
+    console.log(`  God mode: ${room.godMode}`);
+    ack?.({ ok: true, godMode: room.godMode });
+  });
+
+  // ── DISCONNECT / LEAVE ─────────────────────────────────────────
+  socket.on("leave", (_, ack) => { leaveRoom(); ack?.({ ok: true }); });
+  socket.on("disconnect", () => { console.log(`- ${socket.id}`); leaveRoom(); });
+
+  function leaveRoom() {
+    if (!currentRoom) return;
+    const room = rooms.get(currentRoom);
+    if (!room) { currentRoom = null; return; }
+
+    const player = room.players.get(socket.id);
+    room.players.delete(socket.id);
+    socket.leave(currentRoom);
+
+    if (room.players.size === 0) {
+      clearInterval(room.tickInterval);
+      clearTimeout(room.meetingTimer);
+      rooms.delete(currentRoom);
+      console.log(`  room ${currentRoom} dissolved`);
+    } else {
+      if (room.host === socket.id) {
+        room.host = room.players.keys().next().value;
+      }
+      io.to(currentRoom).emit("player:left", { room: roomSnapshot(room) });
+      if (room.phase === "playing" || room.phase === "meeting" || room.phase === "voting") {
+        checkWinCondition(room) && endGame(room);
+      }
+    }
+    currentRoom = null;
+  }
+
+  // ── Helpers ────────────────────────────────────────────────────
+  function startMeeting(room, caller) {
+    room.phase = "meeting";
+    room.votes = new Map();
+    room.chatLog = [];
+    room.meetingCaller = caller.id;
+
+    // Teleport everyone to center
+    for (const [, p] of room.players) {
+      if (p.alive) {
+        const angle = Math.random() * Math.PI * 2;
+        p.x = MAP_W / 2 + Math.cos(angle) * 150;
+        p.y = MAP_H / 2 + Math.sin(angle) * 150;
+      }
+    }
+
+    io.to(room.code).emit("meeting:started", {
+      caller: { name: caller.name, color: caller.color },
+      room: roomSnapshot(room),
+      duration: MEETING_DURATION,
+    });
+
+    console.log(`  MEETING called by ${caller.name} in ${room.code}`);
+
+    // Auto-transition to voting after discussion
+    room.meetingTimer = setTimeout(() => {
+      room.phase = "voting";
+      io.to(room.code).emit("voting:started", {
+        duration: VOTE_DURATION,
+        players: [...room.players.values()]
+          .filter((p) => p.alive)
+          .map((p) => ({ id: p.id, name: p.name, color: p.color })),
+      });
+
+      // Auto-resolve if time runs out
+      room.meetingTimer = setTimeout(() => {
+        if (room.phase === "voting") resolveVotes(room);
+      }, VOTE_DURATION);
+    }, MEETING_DURATION);
+  }
+
+  function resolveVotes(room) {
+    clearTimeout(room.meetingTimer);
+
+    // Tally votes
+    const tally = {};
+    for (const [, targetId] of room.votes) {
+      tally[targetId] = (tally[targetId] || 0) + 1;
+    }
+
+    // Find max
+    let maxVotes = 0;
+    let ejected = null;
+    let tie = false;
+    for (const [id, count] of Object.entries(tally)) {
+      if (count > maxVotes) {
+        maxVotes = count;
+        ejected = id;
+        tie = false;
+      } else if (count === maxVotes) {
+        tie = true;
+      }
+    }
+
+    if (tie || ejected === "skip") {
+      ejected = null;
+    }
+
+    let ejectedInfo = null;
+    if (ejected) {
+      const p = room.players.get(ejected);
+      if (p) {
+        p.alive = false;
+        ejectedInfo = { id: p.id, name: p.name, color: p.color, role: p.role };
+      }
+    }
+
+    io.to(room.code).emit("vote:result", {
+      tally,
+      ejected: ejectedInfo,
+      tie: tie || ejected === null,
+    });
+
+    console.log(`  VOTE: ${ejectedInfo ? ejectedInfo.name + " ejected (" + ejectedInfo.role + ")" : "no one ejected"}`);
+
+    // Check win after ejection
+    if (checkWinCondition(room)) {
+      setTimeout(() => endGame(room), 3000);
+    } else {
+      // Return to playing after delay
+      setTimeout(() => {
+        room.phase = "playing";
+        for (const [id] of room.players) {
+          io.to(id).emit("game:resume", fullStateFor(room, id));
+        }
+      }, 4000);
+    }
+  }
+
+  function endGame(room) {
+    clearInterval(room.tickInterval);
+    clearTimeout(room.meetingTimer);
+    room.phase = "gameover";
+
+    const impostors = [...room.players.values()]
+      .filter((p) => p.role === "impostor")
+      .map((p) => ({ name: p.name, color: p.color }));
+
+    io.to(room.code).emit("game:over", {
+      winner: room.winner,
+      impostors,
+      room: roomSnapshot(room),
+    });
+    console.log(`  GAME OVER: ${room.winner} wins in ${room.code}`);
+  }
+});
+
+function broadcastPositions(room) {
+  if (room.phase !== "playing") return;
+  const positions = {};
+  for (const [id, p] of room.players) {
+    positions[id] = { x: p.x, y: p.y, alive: p.alive, color: p.color, name: p.name };
+  }
+  io.to(room.code).emit("positions", positions);
+}
+
+// ── Start ──────────────────────────────────────────────────────────
+server.listen(PORT, "0.0.0.0", () => {
+  const ip = getLocalIP();
+  console.log(`\n  ⚡ DEADSHIFT server`);
+  console.log(`  Local:   http://localhost:${PORT}`);
+  console.log(`  Network: http://${ip}:${PORT}\n`);
+});
