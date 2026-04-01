@@ -179,7 +179,7 @@ io.on("connection", (socket) => {
     socket.join(code);
     currentRoom = code;
     console.log(`  room ${code} by ${player.name}`);
-    ack?.({ ok: true, room: roomSnapshot(room) });
+    ack?.({ ok: true, yourId: socket.id, room: roomSnapshot(room) });
   });
 
   socket.on("join", ({ code, name } = {}, ack) => {
@@ -200,7 +200,7 @@ io.on("connection", (socket) => {
     socket.join(code);
     currentRoom = code;
     console.log(`  ${player.name} → ${code}`);
-    ack?.({ ok: true, room: roomSnapshot(room) });
+    ack?.({ ok: true, yourId: socket.id, room: roomSnapshot(room) });
     socket.to(code).emit("player:joined", { room: roomSnapshot(room) });
   });
 

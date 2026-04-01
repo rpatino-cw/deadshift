@@ -403,10 +403,10 @@ def on_kicked():
 def connect_and_create(server, name):
     try:
         sio.connect(f"http://{server}", transports=["websocket"])
-        gs.my_id = sio.sid
         resp = sio.call("create", {"name": name, "maxPlayers": 8})
         if resp and resp.get("ok"):
             gs.room = resp["room"]
+            gs.my_id = resp["yourId"]
             gs.phase = "lobby"
             gs.code_input = resp["room"]["code"]
             if ADMIN_MODE:
@@ -421,10 +421,10 @@ def connect_and_join(server, name, code):
     try:
         if not sio.connected:
             sio.connect(f"http://{server}", transports=["websocket"])
-            gs.my_id = sio.sid
         resp = sio.call("join", {"name": name, "code": code})
         if resp and resp.get("ok"):
             gs.room = resp["room"]
+            gs.my_id = resp["yourId"]
             gs.phase = "lobby"
         else:
             gs.error_msg = resp.get("error", "Failed to join")
