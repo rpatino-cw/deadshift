@@ -184,36 +184,93 @@ def build_display_lists():
 
 # ── OBJ Model Loader ──────────────────────────────────────────────
 def load_obj_as_display_list(filepath):
-    """Load an OBJ file and compile it into a GL display list."""
-    if not HAS_PYWAVEFRONT or not os.path.exists(filepath):
+    """Load an OBJ file with normals and compile into a GL display list."""
+    if not os.path.exists(filepath):
         return None
 
-    scene = pywavefront.Wavefront(filepath, collect_faces=True, parse=True)
+    # Parse OBJ manually for proper v//vn face format
+    verts = []
+    normals = []
+    faces = []
+
+    with open(filepath) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("v "):
+                parts = line.split()
+                verts.append((float(parts[1]), float(parts[2]), float(parts[3])))
+            elif line.startswith("vn "):
+                parts = line.split()
+                normals.append((float(parts[1]), float(parts[2]), float(parts[3])))
+            elif line.startswith("f "):
+                parts = line.split()[1:]
+                face_verts = []
+                for p in parts:
+                    if "//" in p:
+                        vi, ni = p.split("//")
+                        face_verts.append((int(vi) - 1, int(ni) - 1))
+                    elif "/" in p:
+                        segs = p.split("/")
+                        vi = int(segs[0]) - 1
+                        ni = int(segs[-1]) - 1 if len(segs) >= 3 and segs[2] else -1
+                        face_verts.append((vi, ni))
+                    else:
+                        face_verts.append((int(p) - 1, -1))
+                faces.append(face_verts)
+
     dl = glGenLists(1)
     glNewList(dl, GL_COMPILE)
-
-    for mesh in scene.mesh_list:
-        glBegin(GL_TRIANGLES)
-        for face in mesh.faces:
-            for vi in face:
-                v = scene.vertices[vi]
-                # OBJ vertices are (x, y, z) — use as-is
-                glNormal3f(0, 1, 0)  # simplified normal
-                glVertex3f(v[0], v[1], v[2])
-        glEnd()
-
+    glBegin(GL_TRIANGLES)
+    for face in faces:
+        for vi, ni in face:
+            if 0 <= ni < len(normals):
+                glNormal3f(*normals[ni])
+            else:
+                glNormal3f(0, 1, 0)
+            if 0 <= vi < len(verts):
+                glVertex3f(*verts[vi])
+    glEnd()
     glEndList()
     return dl
 
 
+# Scale factors: Kenney models are ~1 unit tall, our game uses much larger units
+# Generated models are pre-scaled to game units (no scaling needed)
+MODEL_SCALES = {
+    "kenney_crewmate.obj": 38,      # 0.79 * 38 = ~30 (CHAR_HEIGHT)
+    "kenney_rack.obj": 133,          # 0.60 * 133 = ~80 (rack height)
+    "kenney_meeting_btn.obj": 40,    # 0.64 * 40 = ~25
+    "kenney_sab_terminal.obj": 30,   # 0.80 * 30 = ~24
+    # Generated models: already at game scale
+    "crewmate.obj": 1,
+    "rack.obj": 1,
+    "meeting_btn.obj": 1,
+    "sab_terminal.obj": 1,
+}
+
+
 def load_models():
-    """Load all OBJ models, return dict of display list IDs (or None if missing)."""
+    """Load all OBJ models. Prefers Kenney CC0 models, falls back to generated."""
     models = {}
-    names = ["crewmate", "rack", "meeting_btn", "sab_terminal"]
-    for name in names:
-        path = os.path.join(MODELS_DIR, f"{name}.obj")
-        models[name] = load_obj_as_display_list(path)
-    return models
+    scales = {}
+    model_map = {
+        "crewmate": ["kenney_crewmate.obj", "crewmate.obj"],
+        "rack": ["kenney_rack.obj", "rack.obj"],
+        "meeting_btn": ["kenney_meeting_btn.obj", "meeting_btn.obj"],
+        "sab_terminal": ["kenney_sab_terminal.obj", "sab_terminal.obj"],
+    }
+    for name, candidates in model_map.items():
+        for filename in candidates:
+            path = os.path.join(MODELS_DIR, filename)
+            dl = load_obj_as_display_list(path)
+            if dl:
+                models[name] = dl
+                scales[name] = MODEL_SCALES.get(filename, 1)
+                break
+        else:
+            models[name] = None
+            scales[name] = 1
+    return models, scales
 
 
 # ── Fog Texture ────────────────────────────────────────────────────────
@@ -283,7 +340,7 @@ class Renderer3D:
         self.width = width
         self.height = height
         self.dl = build_display_lists()
-        self.models = load_models()
+        self.models, self.model_scales = load_models()
         self.fog_tex = build_fog_texture(FLASHLIGHT_RADIUS, 40, width, height)
         self.hud_surf = pygame.Surface((width, height), pygame.SRCALPHA)
         self.dh_map = DATAHALL_MAP
@@ -388,8 +445,9 @@ class Renderer3D:
             glColor3f(*C_RACK)
             glPushMatrix()
             if rack_model:
-                # OBJ model is pre-scaled to 26x80x46 centered at origin
+                s = self.model_scales.get("rack", 1)
                 glTranslatef(rack["x"], 0, rack["z"])
+                glScalef(s, s, s)
                 glCallList(rack_model)
             else:
                 glTranslatef(rack["x"], rack["h"] / 2, rack["z"])
@@ -478,6 +536,8 @@ class Renderer3D:
             glPushMatrix()
             glTranslatef(station["x"], 0, station["y"])
             if sab_model:
+                s = self.model_scales.get("sab_terminal", 1)
+                glScalef(s, s, s)
                 glCallList(sab_model)
             else:
                 glTranslatef(0, 15, 0)
@@ -506,6 +566,8 @@ class Renderer3D:
         glPushMatrix()
         glTranslatef(bx, 0, bz)
         if btn_model:
+            s = self.model_scales.get("meeting_btn", 1)
+            glScalef(s, s, s)
             glCallList(btn_model)
         else:
             glTranslatef(0, 25, 0)
@@ -519,6 +581,8 @@ class Renderer3D:
         glPushMatrix()
         glTranslatef(x, 0, z)
         if crew_model:
+            s = self.model_scales.get("crewmate", 1)
+            glScalef(s, s, s)
             glCallList(crew_model)
         else:
             glCallList(self.dl["character"])
