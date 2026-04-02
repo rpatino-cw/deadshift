@@ -7,15 +7,24 @@ via the blit_surface_to_screen() path.
 
 import math
 import time
+import os
 import pygame
 from OpenGL.GL import *
 from OpenGL.GLU import *
+
+try:
+    import pywavefront
+    HAS_PYWAVEFRONT = True
+except ImportError:
+    HAS_PYWAVEFRONT = False
 
 try:
     from datahall_map import generate_evi01_map
     DATAHALL_MAP = generate_evi01_map()
 except Exception:
     DATAHALL_MAP = None
+
+MODELS_DIR = os.path.join(os.path.dirname(__file__), "assets", "models")
 
 # ── Constants ──────────────────────────────────────────────────────────
 CAM_ANGLE = 55       # degrees from horizontal
@@ -173,6 +182,40 @@ def build_display_lists():
     return lists
 
 
+# ── OBJ Model Loader ──────────────────────────────────────────────
+def load_obj_as_display_list(filepath):
+    """Load an OBJ file and compile it into a GL display list."""
+    if not HAS_PYWAVEFRONT or not os.path.exists(filepath):
+        return None
+
+    scene = pywavefront.Wavefront(filepath, collect_faces=True, parse=True)
+    dl = glGenLists(1)
+    glNewList(dl, GL_COMPILE)
+
+    for mesh in scene.mesh_list:
+        glBegin(GL_TRIANGLES)
+        for face in mesh.faces:
+            for vi in face:
+                v = scene.vertices[vi]
+                # OBJ vertices are (x, y, z) — use as-is
+                glNormal3f(0, 1, 0)  # simplified normal
+                glVertex3f(v[0], v[1], v[2])
+        glEnd()
+
+    glEndList()
+    return dl
+
+
+def load_models():
+    """Load all OBJ models, return dict of display list IDs (or None if missing)."""
+    models = {}
+    names = ["crewmate", "rack", "meeting_btn", "sab_terminal"]
+    for name in names:
+        path = os.path.join(MODELS_DIR, f"{name}.obj")
+        models[name] = load_obj_as_display_list(path)
+    return models
+
+
 # ── Fog Texture ────────────────────────────────────────────────────────
 def build_fog_texture(radius, edge_width, width, height):
     """Build a screen-sized RGBA texture with a transparent circle in the center."""
@@ -240,6 +283,7 @@ class Renderer3D:
         self.width = width
         self.height = height
         self.dl = build_display_lists()
+        self.models = load_models()
         self.fog_tex = build_fog_texture(FLASHLIGHT_RADIUS, 40, width, height)
         self.hud_surf = pygame.Surface((width, height), pygame.SRCALPHA)
         self.dh_map = DATAHALL_MAP
@@ -337,18 +381,23 @@ class Renderer3D:
     def _draw_racks(self):
         """Draw all 320 server racks from the datahall layout."""
         C_RACK = (0.2, 0.2, 0.25)
-        C_RACK_FRONT = (0.08, 0.08, 0.10)
         C_RACK_LED = (0.0, 0.4, 0.1)
+        rack_model = self.models.get("rack")
 
         for rack in self.dh_map["racks"]:
             glColor3f(*C_RACK)
             glPushMatrix()
-            glTranslatef(rack["x"], rack["h"] / 2, rack["z"])
-            glScalef(rack["w"], rack["h"], rack["d"])
-            glCallList(self.dl["rack"])
+            if rack_model:
+                # OBJ model is pre-scaled to 26x80x46 centered at origin
+                glTranslatef(rack["x"], 0, rack["z"])
+                glCallList(rack_model)
+            else:
+                glTranslatef(rack["x"], rack["h"] / 2, rack["z"])
+                glScalef(rack["w"], rack["h"], rack["d"])
+                glCallList(self.dl["cube"])
             glPopMatrix()
 
-            # Small green LED dot on front face (subtle life indicator)
+            # Green LED dot
             glDisable(GL_LIGHTING)
             glColor3f(*C_RACK_LED)
             glPointSize(2)
@@ -423,12 +472,17 @@ class Renderer3D:
             if done:
                 continue  # hide completed sabotages
 
-            # Red warning marker in the corridor
+            # Sabotage terminal
+            sab_model = self.models.get("sab_terminal")
             glColor3f(*C_RED)
             glPushMatrix()
-            glTranslatef(station["x"], 15, station["y"])
-            glScalef(15, 30, 15)
-            glCallList(self.dl["cube"])
+            glTranslatef(station["x"], 0, station["y"])
+            if sab_model:
+                glCallList(sab_model)
+            else:
+                glTranslatef(0, 15, 0)
+                glScalef(15, 30, 15)
+                glCallList(self.dl["cube"])
             glPopMatrix()
 
             # Red glow ring
@@ -447,11 +501,27 @@ class Renderer3D:
             return
         bx = gs.meeting_button["x"]
         bz = gs.meeting_button["y"]
+        btn_model = self.models.get("meeting_btn")
         glColor3f(*C_MEETING_BTN)
         glPushMatrix()
-        glTranslatef(bx, 25, bz)
-        glScalef(30, 30, 30)
-        glCallList(self.dl["sphere"])
+        glTranslatef(bx, 0, bz)
+        if btn_model:
+            glCallList(btn_model)
+        else:
+            glTranslatef(0, 25, 0)
+            glScalef(30, 30, 30)
+            glCallList(self.dl["sphere"])
+        glPopMatrix()
+
+    def _draw_character(self, x, z):
+        """Draw a crewmate at (x, 0, z) using OBJ model or fallback."""
+        crew_model = self.models.get("crewmate")
+        glPushMatrix()
+        glTranslatef(x, 0, z)
+        if crew_model:
+            glCallList(crew_model)
+        else:
+            glCallList(self.dl["character"])
         glPopMatrix()
 
     def _draw_players(self, gs):
@@ -466,10 +536,7 @@ class Renderer3D:
                 continue
             color = hex_to_gl(p.get("color", "#ffffff"))
             glColor3f(*color)
-            glPushMatrix()
-            glTranslatef(p["x"], 0, p["y"])
-            glCallList(self.dl["character"])
-            glPopMatrix()
+            self._draw_character(p["x"], p["y"])
 
     def _draw_local_player(self, gs):
         if gs.my_id in gs.positions:
@@ -477,12 +544,8 @@ class Renderer3D:
         else:
             my_color = C_WHITE
 
-        # Humanoid character
         glColor3f(*my_color)
-        glPushMatrix()
-        glTranslatef(gs.my_x, 0, gs.my_y)
-        glCallList(self.dl["character"])
-        glPopMatrix()
+        self._draw_character(gs.my_x, gs.my_y)
 
         # White ring at base for visibility
         glDisable(GL_LIGHTING)
