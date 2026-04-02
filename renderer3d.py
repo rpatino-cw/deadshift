@@ -435,38 +435,24 @@ class Renderer3D:
 
         glEnable(GL_LIGHTING)
 
-        # Draw server racks from datahall map
+        # Draw rack floor outlines from datahall map
         if self.dh_map:
-            self._draw_racks()
+            self._draw_rack_outlines()
 
-    def _draw_racks(self):
-        """Draw all 320 server racks from the datahall layout."""
-        C_RACK = (0.2, 0.2, 0.25)
-        C_RACK_LED = (0.0, 0.4, 0.1)
-        rack_model = self.models.get("rack")
-
+    def _draw_rack_outlines(self):
+        """Draw flat floor markings where racks would be."""
+        glDisable(GL_LIGHTING)
         for rack in self.dh_map["racks"]:
-            glColor3f(*C_RACK)
-            glPushMatrix()
-            if rack_model:
-                s = self.model_scales.get("rack", 1)
-                glTranslatef(rack["x"], 0, rack["z"])
-                glScalef(s, s, s)
-                glCallList(rack_model)
-            else:
-                glTranslatef(rack["x"], rack["h"] / 2, rack["z"])
-                glScalef(rack["w"], rack["h"], rack["d"])
-                glCallList(self.dl["cube"])
-            glPopMatrix()
-
-            # Green LED dot
-            glDisable(GL_LIGHTING)
-            glColor3f(*C_RACK_LED)
-            glPointSize(2)
-            glBegin(GL_POINTS)
-            glVertex3f(rack["x"], rack["h"] * 0.8, rack["z"] - rack["d"] / 2 - 0.5)
+            hw, hd = rack["w"] / 2, rack["d"] / 2
+            x, z = rack["x"], rack["z"]
+            glColor3f(0.12, 0.12, 0.18)
+            glBegin(GL_LINE_LOOP)
+            glVertex3f(x - hw, 0.2, z - hd)
+            glVertex3f(x + hw, 0.2, z - hd)
+            glVertex3f(x + hw, 0.2, z + hd)
+            glVertex3f(x - hw, 0.2, z + hd)
             glEnd()
-            glEnable(GL_LIGHTING)
+        glEnable(GL_LIGHTING)
 
     def _draw_border(self, gs):
         mw, mh = gs.map_size
@@ -498,86 +484,62 @@ class Renderer3D:
                 glPopMatrix()
 
     def _draw_task_stations(self, gs):
+        glDisable(GL_LIGHTING)
         for station in gs.task_stations:
             has_task = any(
                 t["stationId"] == station["id"] and not t.get("done")
                 for t in gs.my_tasks
             )
             if not has_task:
-                continue  # only show active task markers
-
-            # Floating yellow diamond above the rack
-            glColor3f(*C_YELLOW)
-            glPushMatrix()
-            glTranslatef(station["x"], 90, station["y"])
-            glRotatef(45, 0, 1, 0)
-            glScalef(12, 12, 12)
-            glCallList(self.dl["cube"])
-            glPopMatrix()
-
-            # Pulsing glow ring on floor
-            glDisable(GL_LIGHTING)
+                continue
+            # Yellow floor circle
             glColor3f(0.95, 0.75, 0.1)
             glBegin(GL_LINE_LOOP)
             for i in range(16):
                 angle = 2 * math.pi * i / 16
-                glVertex3f(station["x"] + 20 * math.cos(angle), 0.5,
+                glVertex3f(station["x"] + 20 * math.cos(angle), 0.3,
                            station["y"] + 20 * math.sin(angle))
             glEnd()
-            glEnable(GL_LIGHTING)
+        glEnable(GL_LIGHTING)
 
     def _draw_sabotage_stations(self, gs):
         if gs.my_role != "impostor":
             return
+        glDisable(GL_LIGHTING)
         for station in gs.sabotage_stations:
             done = station["id"] in gs.active_sabotages
             if done:
-                continue  # hide completed sabotages
-
-            # Sabotage terminal
-            sab_model = self.models.get("sab_terminal")
-            glColor3f(*C_RED)
-            glPushMatrix()
-            glTranslatef(station["x"], 0, station["y"])
-            if sab_model:
-                s = self.model_scales.get("sab_terminal", 1)
-                glScalef(s, s, s)
-                glCallList(sab_model)
-            else:
-                glTranslatef(0, 15, 0)
-                glScalef(15, 30, 15)
-                glCallList(self.dl["cube"])
-            glPopMatrix()
-
-            # Red glow ring
-            glDisable(GL_LIGHTING)
+                continue
+            # Red floor circle
             glColor3f(0.9, 0.2, 0.1)
             glBegin(GL_LINE_LOOP)
             for i in range(16):
                 angle = 2 * math.pi * i / 16
-                glVertex3f(station["x"] + 18 * math.cos(angle), 0.5,
+                glVertex3f(station["x"] + 18 * math.cos(angle), 0.3,
                            station["y"] + 18 * math.sin(angle))
             glEnd()
-            glEnable(GL_LIGHTING)
+        glEnable(GL_LIGHTING)
 
     def _draw_meeting_button(self, gs):
         if not gs.meeting_button:
             return
         bx = gs.meeting_button["x"]
         bz = gs.meeting_button["y"]
-        btn_model = self.models.get("meeting_btn")
-        glColor3f(*C_MEETING_BTN)
-        glPushMatrix()
-        glTranslatef(bx, 0, bz)
-        if btn_model:
-            s = self.model_scales.get("meeting_btn", 1)
-            glScalef(s, s, s)
-            glCallList(btn_model)
-        else:
-            glTranslatef(0, 25, 0)
-            glScalef(30, 30, 30)
-            glCallList(self.dl["sphere"])
-        glPopMatrix()
+        # Red floor circle
+        glDisable(GL_LIGHTING)
+        glColor3f(0.6, 0.1, 0.1)
+        glBegin(GL_LINE_LOOP)
+        for i in range(20):
+            angle = 2 * math.pi * i / 20
+            glVertex3f(bx + 25 * math.cos(angle), 0.3, bz + 25 * math.sin(angle))
+        glEnd()
+        # Inner dot
+        glColor3f(0.9, 0.15, 0.15)
+        glPointSize(6)
+        glBegin(GL_POINTS)
+        glVertex3f(bx, 0.4, bz)
+        glEnd()
+        glEnable(GL_LIGHTING)
 
     def _draw_character(self, x, z, facing=0, walk_timer=0, speed_ratio=0):
         """Draw a crewmate with facing rotation and walk animation."""
