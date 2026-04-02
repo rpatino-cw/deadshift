@@ -102,6 +102,19 @@ class GameState:
         self.admin_panel_open = False
         self.god_mode = False
         self.no_fog = False
+        # Physics & animation
+        self.vx = 0.0
+        self.vy = 0.0  # velocity (vy = game Z direction)
+        self.facing = 0.0  # degrees, 0 = north
+        self.walk_timer = 0.0
+        self.speed_ratio = 0.0  # 0-1, drives animation intensity
+        # Camera orbit
+        self.cam_yaw = 0.0
+        self.cam_pitch = 55.0
+        self.cam_dist = 400.0
+        self.cam_target_yaw = 0.0
+        self.cam_target_pitch = 55.0
+        self.cam_target_dist = 400.0
 
     def notify(self, msg, duration=3):
         self.notification = msg
@@ -1314,20 +1327,84 @@ def main():
                     gs.active_task.draw(overlay2d, font)
                     blit_surface_to_screen(overlay2d, WIDTH, HEIGHT)
             else:
-                # Movement
+                # Camera controls (arrow keys orbit, scroll zooms)
+                cam_speed = 120  # degrees/sec
+                if keys[pygame.K_LEFT]: gs.cam_target_yaw -= cam_speed * dt
+                if keys[pygame.K_RIGHT]: gs.cam_target_yaw += cam_speed * dt
+                if keys[pygame.K_UP]: gs.cam_target_pitch = min(85, gs.cam_target_pitch + cam_speed * dt)
+                if keys[pygame.K_DOWN]: gs.cam_target_pitch = max(15, gs.cam_target_pitch - cam_speed * dt)
+                for ev in events:
+                    if ev.type == pygame.MOUSEWHEEL:
+                        gs.cam_target_dist = max(150, min(800, gs.cam_target_dist - ev.y * 30))
+
+                # Smooth camera interpolation
+                cam_f = 1 - 2 ** (-dt / 0.08)
+                gs.cam_yaw += (gs.cam_target_yaw - gs.cam_yaw) * cam_f
+                gs.cam_pitch += (gs.cam_target_pitch - gs.cam_pitch) * cam_f
+                gs.cam_dist += (gs.cam_target_dist - gs.cam_dist) * cam_f
+
+                # Movement (WASD relative to camera yaw)
                 if am_alive:
-                    dx, dy = 0, 0
-                    if keys[pygame.K_w] or keys[pygame.K_UP]: dy -= MOVE_SPEED
-                    if keys[pygame.K_s] or keys[pygame.K_DOWN]: dy += MOVE_SPEED
-                    if keys[pygame.K_a] or keys[pygame.K_LEFT]: dx -= MOVE_SPEED
-                    if keys[pygame.K_d] or keys[pygame.K_RIGHT]: dx += MOVE_SPEED
+                    input_dx, input_dy = 0, 0
+                    if keys[pygame.K_w]: input_dy -= 1
+                    if keys[pygame.K_s]: input_dy += 1
+                    if keys[pygame.K_a]: input_dx -= 1
+                    if keys[pygame.K_d]: input_dx += 1
 
-                    if dx and dy:
-                        dx *= 0.707
-                        dy *= 0.707
+                    # Rotate input by camera yaw so W = "forward" relative to camera
+                    if input_dx or input_dy:
+                        yaw_rad = math.radians(gs.cam_yaw)
+                        rx = input_dx * math.cos(yaw_rad) - input_dy * math.sin(yaw_rad)
+                        ry = input_dx * math.sin(yaw_rad) + input_dy * math.cos(yaw_rad)
+                        length = math.sqrt(rx*rx + ry*ry) or 1
+                        rx /= length
+                        ry /= length
+                    else:
+                        rx, ry = 0, 0
 
-                    gs.my_x = max(20, min(MAP_W - 20, gs.my_x + dx))
-                    gs.my_y = max(20, min(MAP_H - 20, gs.my_y + dy))
+                    # Sprint with shift
+                    max_speed = MOVE_SPEED * (1.6 if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT] else 1.0)
+                    accel = 25.0
+                    friction = 12.0
+
+                    if rx or ry:
+                        # Accelerate toward target velocity
+                        target_vx = rx * max_speed
+                        target_vy = ry * max_speed
+                        gs.vx += (target_vx - gs.vx) * min(1, accel * dt / max_speed)
+                        gs.vy += (target_vy - gs.vy) * min(1, accel * dt / max_speed)
+                    else:
+                        # Friction deceleration
+                        speed = math.sqrt(gs.vx**2 + gs.vy**2)
+                        if speed > 0.01:
+                            decel = min(speed, friction * dt)
+                            gs.vx -= (gs.vx / speed) * decel
+                            gs.vy -= (gs.vy / speed) * decel
+                        else:
+                            gs.vx = gs.vy = 0
+
+                    # Clamp speed
+                    speed = math.sqrt(gs.vx**2 + gs.vy**2)
+                    if speed > max_speed:
+                        gs.vx = gs.vx / speed * max_speed
+                        gs.vy = gs.vy / speed * max_speed
+
+                    # Apply velocity
+                    gs.my_x = max(20, min(MAP_W - 20, gs.my_x + gs.vx))
+                    gs.my_y = max(20, min(MAP_H - 20, gs.my_y + gs.vy))
+
+                    # Speed ratio for animation
+                    gs.speed_ratio = min(1.0, speed / MOVE_SPEED)
+
+                    # Smooth facing toward movement direction
+                    if speed > 0.3:
+                        target_angle = math.degrees(math.atan2(gs.vx, -gs.vy)) % 360
+                        diff = (target_angle - gs.facing + 180) % 360 - 180
+                        turn_f = 1 - 2 ** (-dt / 0.1)
+                        gs.facing = (gs.facing + diff * turn_f) % 360
+
+                    # Walk animation timer (scaled by speed)
+                    gs.walk_timer += dt * 8.0 * gs.speed_ratio
 
                     # Send position to server at tick rate
                     now = time.time()

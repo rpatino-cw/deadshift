@@ -358,20 +358,24 @@ class Renderer3D:
         glClearColor(0, 0, 0, 1)
         glShadeModel(GL_SMOOTH)
 
-    def _setup_camera(self, px, pz):
+    def _setup_camera(self, gs):
         glMatrixMode(GL_PROJECTION)
         glLoadIdentity()
         gluPerspective(CAM_FOV, self.width / self.height, 1.0, 5000.0)
         glMatrixMode(GL_MODELVIEW)
         glLoadIdentity()
 
-        angle_rad = math.radians(CAM_ANGLE)
-        eye_y = CAM_DISTANCE * math.sin(angle_rad)
-        eye_z_off = CAM_DISTANCE * math.cos(angle_rad)
+        yaw_rad = math.radians(gs.cam_yaw)
+        pitch_rad = math.radians(gs.cam_pitch)
+        dist = gs.cam_dist
+
+        eye_x = gs.my_x + dist * math.sin(yaw_rad) * math.cos(pitch_rad)
+        eye_y = dist * math.sin(pitch_rad)
+        eye_z = gs.my_y + dist * math.cos(yaw_rad) * math.cos(pitch_rad)
 
         gluLookAt(
-            px, eye_y, pz + eye_z_off,
-            px, 0, pz,
+            eye_x, eye_y, eye_z,
+            gs.my_x, 15, gs.my_y,
             0, 1, 0,
         )
 
@@ -382,7 +386,7 @@ class Renderer3D:
         # 3D pass
         glEnable(GL_DEPTH_TEST)
         glEnable(GL_LIGHTING)
-        self._setup_camera(gs.my_x, gs.my_y)
+        self._setup_camera(gs)
 
         self._draw_floor(gs)
         self._draw_border(gs)
@@ -575,11 +579,23 @@ class Renderer3D:
             glCallList(self.dl["sphere"])
         glPopMatrix()
 
-    def _draw_character(self, x, z):
-        """Draw a crewmate at (x, 0, z) using OBJ model or fallback."""
+    def _draw_character(self, x, z, facing=0, walk_timer=0, speed_ratio=0):
+        """Draw a crewmate with facing rotation and walk animation."""
         crew_model = self.models.get("crewmate")
+        t = walk_timer
+        sr = speed_ratio
+
+        # Walk animation transforms
+        bob_y = abs(math.sin(t)) * 2.0 * sr
+        sway_x = math.sin(t * 0.5) * 0.8 * sr
+        tilt_z = math.sin(t * 0.5) * 3.0 * sr  # lateral lean
+        tilt_x = math.sin(t) * 2.0 * sr  # forward pitch per step
+
         glPushMatrix()
-        glTranslatef(x, 0, z)
+        glTranslatef(x + sway_x, bob_y, z)
+        glRotatef(facing, 0, 1, 0)  # face movement direction
+        glRotatef(tilt_z, 0, 0, 1)  # lateral lean
+        glRotatef(tilt_x, 1, 0, 0)  # forward pitch
         if crew_model:
             s = self.model_scales.get("crewmate", 1)
             glScalef(s, s, s)
@@ -609,7 +625,7 @@ class Renderer3D:
             my_color = C_WHITE
 
         glColor3f(*my_color)
-        self._draw_character(gs.my_x, gs.my_y)
+        self._draw_character(gs.my_x, gs.my_y, gs.facing, gs.walk_timer, gs.speed_ratio)
 
         # White ring at base for visibility
         glDisable(GL_LIGHTING)
